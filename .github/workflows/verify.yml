@@ -1,0 +1,36 @@
+name: verify
+on:
+  push:
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17.5-bookworm
+        env:
+          POSTGRES_DB: relay_test
+          POSTGRES_USER: relay_owner
+          POSTGRES_PASSWORD: local-test-owner-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U relay_owner -d relay_test"
+          --health-interval=2s --health-timeout=3s --health-retries=20
+    env:
+      TEST_DATABASE_ADMIN_URL: postgres://relay_owner:local-test-owner-password@localhost:5432/relay_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.4.1
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: TEST_DATABASE_ADMIN_URL= npm test
+      - run: DATABASE_URL=$TEST_DATABASE_ADMIN_URL npm run migrate:postgres
+      - run: npm run test:postgres
+      - run: npm run build
+      - run: npm run openapi:export
+      - run: npm audit --audit-level=moderate
+      - run: docker build -t relay:${{ github.sha }} .

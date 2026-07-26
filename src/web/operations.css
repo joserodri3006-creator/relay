@@ -1,0 +1,22 @@
+.nav-section { margin-top: 22px; }
+.operations-view { min-height: 100%; background: var(--bg, #f4f5f2); }
+.operations-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; margin: 0 32px 22px; overflow: hidden; border: 1px solid #dde1da; border-radius: 12px; background: #dde1da; }
+.operations-summary div { display: flex; flex-direction: column; gap: 3px; padding: 18px 20px; background: #fff; }
+.operations-summary strong { color: #17231d; font-size: 25px; }
+.operations-summary span { color: #66716b; font-size: 12px; }
+.operations-list { display: flex; flex-direction: column; gap: 10px; padding: 0 32px 40px; }
+.operations-empty { display: grid; justify-items: center; gap: 8px; padding: 80px 24px; border: 1px dashed #cbd2cc; border-radius: 14px; color: #66716b; text-align: center; background: rgba(255,255,255,.55); }
+.operations-empty .icon { width: 30px; height: 30px; color: #547765; }
+.operations-empty h2 { margin: 8px 0 0; color: #26352d; font-size: 18px; }
+.operations-empty p { max-width: 520px; margin: 0; line-height: 1.5; }
+.issue-card { display: grid; grid-template-columns: 42px minmax(0, 1fr) auto; align-items: center; gap: 16px; padding: 18px; border: 1px solid #dfe3dd; border-radius: 12px; background: #fff; box-shadow: 0 3px 12px rgba(25,42,33,.04); }
+.issue-mark { display: grid; width: 42px; height: 42px; place-items: center; border-radius: 10px; background: #f1f3ef; color: #53655b; }
+.issue-mark .icon { width: 20px; }
+.issue-dead_letter, .issue-blocked { background: #fff0eb; color: #b34c2d; }
+.issue-retrying { background: #fff7df; color: #926d10; }
+.issue-copy { min-width: 0; }
+.issue-copy h2 { margin: 3px 0 7px; color: #223028; font-size: 16px; text-transform: capitalize; }
+.issue-copy p { margin: 0 0 7px; color: #5e6a63; font-size: 12px; }
+.issue-copy code { color: #374840; font-size: 11px; }
+.issue-copy small { display: block; max-width: 720px; color: #78817c; line-height: 1.45; }
+@media (max-width: 800px) { .operations-summary { grid-template-columns: 1fr; margin-inline: 18px; } .operations-list { padding-inline: 18px; } .issue-card { grid-template-columns: 42px 1fr; } .issue-card > button { grid-column: 2; justify-self: start; } }

@@ -1,0 +1,32 @@
+{
+  "schemaVersion": "1.0",
+  "tenant": {
+    "legalName": "R&C Lifestyle",
+    "brandName": "Blazed Outfitters",
+    "slug": "blazed-outfitters"
+  },
+  "channelInventory": {
+    "email": {
+      "count": 4,
+      "accounts": []
+    },
+    "instagram": {
+      "count": 3,
+      "accounts": []
+    },
+    "tiktok": {
+      "count": 1,
+      "accounts": []
+    }
+  },
+  "pilot": {
+    "phase": "intake",
+    "initialChannel": "email",
+    "initialAccountCount": 1,
+    "activationMode": "shadow",
+    "remainingAccountsEnabled": false
+  },
+  "security": {
+    "secretsInRepository": false
+  }
+}
