@@ -1,0 +1,19 @@
+node_modules/
+dist/
+coverage/
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+.idea/
+.vscode/
+
+# Local runtime and test state
+.data/
+tmp/
+playwright-report/
+test-results/
+
+# Local research/build workspace; finalized artifacts live under outputs/
+work/
