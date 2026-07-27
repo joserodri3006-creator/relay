@@ -37,15 +37,22 @@ export const pilotChannelAccountSchema = z.object({
   type: z.enum(["email", "instagram", "tiktok"]),
   identifier: z.string().trim().min(2).max(200),
   label: z.string().trim().max(120).optional().default(""),
-  provider: z.enum(["microsoft_365", "google_workspace", "other"]).optional()
+  provider: z.enum(["microsoft_365", "google_workspace", "other"]).optional(),
+  providerName: z.string().trim().min(2).max(120).optional()
 }).strict().superRefine((account, context) => {
   if (account.type === "email") {
     if (!z.string().email().safeParse(account.identifier).success) {
       context.addIssue({ code: "custom", path: ["identifier"], message: "Für E-Mail-Kanäle ist eine gültige geschäftliche Adresse erforderlich." });
     }
+    if (account.provider === "other" && !account.providerName) {
+      context.addIssue({ code: "custom", path: ["providerName"], message: "Bitte den konkreten E-Mail-Anbieter angeben." });
+    }
+    if (account.provider !== "other" && account.providerName !== undefined) {
+      context.addIssue({ code: "custom", path: ["providerName"], message: "Ein freier Anbietername ist nur bei „Anderer Provider“ zulässig." });
+    }
     return;
   }
-  if (account.provider !== undefined) {
+  if (account.provider !== undefined || account.providerName !== undefined) {
     context.addIssue({ code: "custom", path: ["provider"], message: "Ein E-Mail-Provider ist nur für E-Mail-Accounts zulässig." });
   }
   if (!/^@?[A-Za-z0-9._-]{2,100}$/.test(account.identifier)) {

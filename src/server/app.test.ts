@@ -24,7 +24,7 @@ const pilotSetup = {
     { id: "10000000-0000-4000-8000-000000000001", type: "email", identifier: "support@blazed.example", label: "Kundenservice", provider: "microsoft_365" },
     { id: "10000000-0000-4000-8000-000000000002", type: "email", identifier: "orders@blazed.example", label: "Bestellungen" },
     { id: "10000000-0000-4000-8000-000000000003", type: "email", identifier: "returns@blazed.example", label: "Retouren" },
-    { id: "10000000-0000-4000-8000-000000000004", type: "email", identifier: "info@blazed.example", label: "Allgemein" },
+    { id: "10000000-0000-4000-8000-000000000004", type: "email", identifier: "info@blazed.example", label: "Allgemein", provider: "other", providerName: "ALL-INKL" },
     { id: "10000000-0000-4000-8000-000000000005", type: "instagram", identifier: "@blazedoutfitters", label: "Hauptaccount" },
     { id: "10000000-0000-4000-8000-000000000006", type: "instagram", identifier: "@blazedoutfitters.de", label: "Deutschland" },
     { id: "10000000-0000-4000-8000-000000000007", type: "instagram", identifier: "@blazed.community", label: "Community" },
@@ -239,11 +239,21 @@ describe("Case Control vertical slice", () => {
       ...pilotSetup, channelAccounts: [...pilotSetup.channelAccounts, { ...pilotSetup.channelAccounts[0], id: "10000000-0000-4000-8000-000000000099", identifier: "SUPPORT@BLAZED.EXAMPLE" }]
     } });
     expect(duplicate.statusCode).toBe(400);
+    const unnamedProvider = await app.inject({ method: "PUT", url: "/api/v1/pilot-onboarding", headers: { ...editor, "if-match": "0" }, payload: {
+      ...pilotSetup,
+      channelAccounts: pilotSetup.channelAccounts.map(account => account.id === "10000000-0000-4000-8000-000000000004"
+        ? { ...account, providerName: undefined }
+        : account)
+    } });
+    expect(unnamedProvider.statusCode).toBe(400);
     const created = await app.inject({ method: "PUT", url: "/api/v1/pilot-onboarding", headers: { ...editor, "if-match": "0" }, payload: pilotSetup });
     expect(created.statusCode).toBe(201);
     expect(created.json()).toMatchObject({ state: "relay_review_required", setup: {
       organizationName: "R&C Lifestyle", brandName: "Blazed Outfitters", selectedChannelAccountId: pilotSetup.selectedChannelAccountId,
-      channelAccounts: expect.arrayContaining([expect.objectContaining({ identifier: "support@blazed.example", type: "email" })]), version: 1
+      channelAccounts: expect.arrayContaining([
+        expect.objectContaining({ identifier: "support@blazed.example", type: "email" }),
+        expect.objectContaining({ identifier: "info@blazed.example", provider: "other", providerName: "ALL-INKL" })
+      ]), version: 1
     } });
     expect(created.json().setup.channelAccounts).toHaveLength(8);
     expect(JSON.stringify(created.json())).not.toContain("clientSecret");

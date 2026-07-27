@@ -10,6 +10,7 @@ type ChannelAccount = {
   identifier: string;
   label?: string;
   provider?: EmailProvider;
+  providerName?: string;
 };
 type Setup = {
   organizationName: string;
@@ -83,7 +84,12 @@ const gateLabels: Record<string, string> = {
 
 function normalizeSetup(setup: Setup): Setup {
   const accounts = Array.isArray(setup.channelAccounts)
-    ? setup.channelAccounts.map(account => ({ ...account, label: account.label ?? "", provider: account.provider ?? undefined }))
+    ? setup.channelAccounts.map(account => ({
+      ...account,
+      label: account.label ?? "",
+      provider: account.provider ?? undefined,
+      providerName: account.providerName ?? undefined
+    }))
     : [];
   if (accounts.length > 0 && setup.selectedChannelAccountId) return { ...setup, channelAccounts: accounts };
   const fallback = newAccount("email");
@@ -215,7 +221,23 @@ export function PilotOnboarding() {
                     : <span className="blocked-badge">Nur Bestand · nicht Teil dieses Piloten</span>}
                   <button type="button" className="remove-channel" onClick={() => removeAccount(account.id)} aria-label={`${channelLabels[type]} entfernen`}>Entfernen</button>
                 </div>
-                {selected && <label className="pilot-provider">Provider des Pilot-Postfachs<select required value={account.provider ?? ""} onChange={event => changeAccount(account.id, { provider: event.target.value as EmailProvider })}>{Object.entries(providerLabels).map(([key, label]) => <option value={key} key={key}>{label}</option>)}</select></label>}
+                {type === "email" && <div className="pilot-provider">
+                  <label>Provider {selected ? "des Pilot-Postfachs" : <span className="optional">optional</span>}
+                    <select required={selected} value={account.provider ?? ""} onChange={event => {
+                      const provider = event.target.value as EmailProvider | "";
+                      changeAccount(account.id, {
+                        provider: provider || undefined,
+                        providerName: provider === "other" ? account.providerName : undefined
+                      });
+                    }}>
+                      <option value="">Nicht angegeben</option>
+                      {Object.entries(providerLabels).map(([key, label]) => <option value={key} key={key}>{label}</option>)}
+                    </select>
+                  </label>
+                  {account.provider === "other" && <label>Konkreter Anbieter
+                    <input required minLength={2} maxLength={120} value={account.providerName ?? ""} onChange={event => changeAccount(account.id, { providerName: event.target.value })} placeholder="z. B. ALL-INKL" />
+                  </label>}
+                </div>}
               </div>;
             })}
           </section>)}

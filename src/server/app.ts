@@ -59,7 +59,8 @@ const pilotSetupSelect = `SELECT p.tenant_id AS "tenantId",p.organization_name A
   p.access_environment AS "accessEnvironment",p.data_exclusions_confirmed AS "dataExclusionsConfirmed",
   p.inventory_confirmed AS "inventoryConfirmed",p.selected_channel_account_id::text AS "selectedChannelAccountId",
   COALESCE((SELECT jsonb_agg(jsonb_build_object(
-    'id',a.id::text,'type',a.channel_type,'identifier',a.identifier,'label',a.display_label,'provider',a.email_provider
+    'id',a.id::text,'type',a.channel_type,'identifier',a.identifier,'label',a.display_label,
+    'provider',a.email_provider,'providerName',a.email_provider_name
   ) ORDER BY a.created_at,a.id) FROM pilot_channel_accounts a WHERE a.tenant_id=p.tenant_id),'[]'::jsonb) AS "channelAccounts",
   p.version,p.updated_at AS "updatedAt"
   FROM pilot_onboarding_requests p WHERE p.tenant_id=$1`;
@@ -169,9 +170,9 @@ export async function buildApp(db: Database, options: { serveWeb?: boolean; conn
       }
       for (const account of value.channelAccounts) {
         await tx.query(`INSERT INTO pilot_channel_accounts
-          (id,tenant_id,channel_type,identifier,display_label,email_provider,activation_status,created_by_actor_id,updated_by_actor_id)
-          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$8)`,
-          [account.id,request.session.tenantId,account.type,account.identifier,account.label ?? "",account.provider ?? null,account.type === "email" ? "inventory" : "blocked",request.session.actorId]);
+          (id,tenant_id,channel_type,identifier,display_label,email_provider,email_provider_name,activation_status,created_by_actor_id,updated_by_actor_id)
+          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$9)`,
+          [account.id,request.session.tenantId,account.type,account.identifier,account.label ?? "",account.provider ?? null,account.providerName ?? null,account.type === "email" ? "inventory" : "blocked",request.session.actorId]);
       }
       await tx.query("UPDATE pilot_onboarding_requests SET selected_channel_account_id=$2 WHERE tenant_id=$1", [request.session.tenantId,value.selectedChannelAccountId]);
       await tx.query(`INSERT INTO audit_entries(id,tenant_id,category,action,actor_id,subject_type,subject_id,result,request_id,metadata)

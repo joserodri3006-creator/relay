@@ -60,7 +60,7 @@
 .channel-account { display: grid; gap: 12px; padding: 15px; border: 1px solid #dfe4df; border-radius: 11px; background: #fff; }
 .channel-account.pilot-account { border-color: #69a47e; background: #f7fbf8; box-shadow: 0 0 0 2px rgba(76,128,98,.08); }
 .channel-account-fields { display: grid; grid-template-columns: 1.2fr 1fr; gap: 12px; }
-.channel-account-fields label, .pilot-provider { display: flex; flex-direction: column; gap: 6px; color: #47564d; font-size: 11px; font-weight: 600; }
+.channel-account-fields label, .pilot-provider label { display: flex; flex-direction: column; gap: 6px; color: #47564d; font-size: 11px; font-weight: 600; }
 .channel-account input, .channel-account select { width: 100%; box-sizing: border-box; border: 1px solid #cdd5cf; border-radius: 8px; padding: 9px 10px; background: #fff; color: #26352c; font-size: 12px; }
 .optional { color: #949c97; font-weight: 400; }
 .channel-account-actions { display: flex; align-items: center; justify-content: space-between; gap: 15px; }
@@ -70,7 +70,7 @@
 .pilot-radio small { color: #7b8780; font-weight: 400; }
 .blocked-badge { padding: 5px 9px; border-radius: 20px; background: #f1f3f1; color: #6e7972; font-size: 10px; font-weight: 700; }
 .remove-channel { border: 0; background: none; color: #9a5445; font-size: 11px; }
-.pilot-provider { max-width: 300px; }
+.pilot-provider { display: grid; grid-template-columns: repeat(2, minmax(0, 300px)); gap: 12px; }
 .inventory-confirm { font-size: 12px; }
 
 @media (max-width: 900px) {
@@ -78,7 +78,7 @@
   .setup-steps { display: grid; grid-template-columns: repeat(5, 1fr); }
   .setup-steps li { grid-template-columns: 1fr; justify-items: center; text-align: center; }
   .setup-steps li div { display: none; }
-  .setup-fields, .setup-review, .channel-account-fields, .inventory-intro { grid-template-columns: 1fr; }
+  .setup-fields, .setup-review, .channel-account-fields, .inventory-intro, .pilot-provider { grid-template-columns: 1fr; }
   .setup-fields .wide, .setup-warning { grid-column: 1; }
   .setup-header { padding-inline: 20px; }
 }
