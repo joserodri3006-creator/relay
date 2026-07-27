@@ -15,7 +15,7 @@ let runtime: pg.Client;
 run("PostgreSQL tenant isolation", () => {
   beforeAll(async () => {
     const admin = new Client({ connectionString: adminUrl }); await admin.connect();
-    const roleSql = (await admin.query("SELECT format('CREATE ROLE %I LOGIN PASSWORD %L IN ROLE relay_api', $1, $2) AS sql", [loginRole, password])).rows[0].sql;
+    const roleSql = (await admin.query("SELECT format('CREATE ROLE %I LOGIN PASSWORD %L IN ROLE relay_api', $1::text, $2::text) AS sql", [loginRole, password])).rows[0].sql;
     await admin.query(roleSql);
     await admin.query("INSERT INTO tenants(id,name) VALUES($1,'Tenant A'),($2,'Tenant B')", [tenantA, tenantB]);
     await admin.query(`INSERT INTO conversations(id,tenant_id,external_thread_id,connector_id,subject,party_name)
@@ -30,7 +30,7 @@ run("PostgreSQL tenant isolation", () => {
     const admin = new Client({ connectionString: adminUrl }); await admin.connect();
     await admin.query("DELETE FROM conversations WHERE tenant_id IN ($1,$2)", [tenantA, tenantB]);
     await admin.query("DELETE FROM tenants WHERE id IN ($1,$2)", [tenantA, tenantB]);
-    const dropSql = (await admin.query("SELECT format('DROP ROLE %I', $1) AS sql", [loginRole])).rows[0].sql; await admin.query(dropSql); await admin.end();
+    const dropSql = (await admin.query("SELECT format('DROP ROLE %I', $1::text) AS sql", [loginRole])).rows[0].sql; await admin.query(dropSql); await admin.end();
   });
 
   it("liefert ohne Tenant-Kontext keine Zeile", async () => {
