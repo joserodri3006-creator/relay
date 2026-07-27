@@ -122,9 +122,19 @@ export async function createDatabase(path = "memory://") {
       target_start_date date NOT NULL, team_names jsonb NOT NULL, expected_users integer NOT NULL, monthly_cases integer NOT NULL,
       retention_days integer NOT NULL, pilot_owner_name text NOT NULL, pilot_owner_email text NOT NULL,
       technical_contact_name text NOT NULL, technical_contact_email text NOT NULL, access_environment text NOT NULL,
-      data_exclusions_confirmed boolean NOT NULL,
+      data_exclusions_confirmed boolean NOT NULL, brand_name text NOT NULL,
+      inventory_confirmed boolean NOT NULL DEFAULT false, selected_channel_account_id uuid NULL,
       version integer NOT NULL DEFAULT 1, created_by_actor_id uuid NOT NULL, updated_by_actor_id uuid NOT NULL,
       created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE TABLE IF NOT EXISTS pilot_channel_accounts (
+      id uuid PRIMARY KEY, tenant_id uuid NOT NULL, channel_type text NOT NULL CHECK (channel_type IN ('email','instagram','tiktok')),
+      identifier text NOT NULL, display_label text NOT NULL DEFAULT '', email_provider text NULL,
+      activation_status text NOT NULL CHECK (activation_status IN ('inventory','blocked')),
+      created_by_actor_id uuid NOT NULL, updated_by_actor_id uuid NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
+      UNIQUE (tenant_id,id), UNIQUE (tenant_id,channel_type,identifier),
+      FOREIGN KEY (tenant_id) REFERENCES pilot_onboarding_requests(tenant_id) ON DELETE CASCADE
     );
     CREATE TABLE IF NOT EXISTS ingress_receipts (
       id uuid PRIMARY KEY, tenant_id uuid NOT NULL, connector_id text NOT NULL, provider_event_id text NOT NULL,
@@ -146,6 +156,9 @@ export async function createDatabase(path = "memory://") {
     ALTER TABLE outbox_events ADD COLUMN IF NOT EXISTS lease_until timestamptz NULL;
     ALTER TABLE outbox_events ADD COLUMN IF NOT EXISTS dead_lettered_at timestamptz NULL;
     ALTER TABLE outbox_events ADD COLUMN IF NOT EXISTS redrive_count integer NOT NULL DEFAULT 0;
+    ALTER TABLE pilot_onboarding_requests ADD COLUMN IF NOT EXISTS brand_name text NOT NULL DEFAULT 'Bestehende Marke';
+    ALTER TABLE pilot_onboarding_requests ADD COLUMN IF NOT EXISTS inventory_confirmed boolean NOT NULL DEFAULT false;
+    ALTER TABLE pilot_onboarding_requests ADD COLUMN IF NOT EXISTS selected_channel_account_id uuid NULL;
     CREATE UNIQUE INDEX IF NOT EXISTS idx_ingress_connector_event ON ingress_receipts(tenant_id,connector_id,provider_event_id);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_interaction_connector_event ON interactions(tenant_id,connector_id,provider_event_id);
   `);

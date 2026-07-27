@@ -32,10 +32,34 @@ export const handoffSchema = z.object({
   dueAt: z.string().datetime().nullable().optional()
 });
 export const handoffDecisionSchema = z.object({ decision: z.enum(["accepted", "declined", "cancelled"]) });
+export const pilotChannelAccountSchema = z.object({
+  id: z.string().uuid(),
+  type: z.enum(["email", "instagram", "tiktok"]),
+  identifier: z.string().trim().min(2).max(200),
+  label: z.string().trim().max(120).optional().default(""),
+  provider: z.enum(["microsoft_365", "google_workspace", "other"]).optional()
+}).strict().superRefine((account, context) => {
+  if (account.type === "email") {
+    if (!z.string().email().safeParse(account.identifier).success) {
+      context.addIssue({ code: "custom", path: ["identifier"], message: "Für E-Mail-Kanäle ist eine gültige geschäftliche Adresse erforderlich." });
+    }
+    return;
+  }
+  if (account.provider !== undefined) {
+    context.addIssue({ code: "custom", path: ["provider"], message: "Ein E-Mail-Provider ist nur für E-Mail-Accounts zulässig." });
+  }
+  if (!/^@?[A-Za-z0-9._-]{2,100}$/.test(account.identifier)) {
+    context.addIssue({ code: "custom", path: ["identifier"], message: "Social-Kanäle benötigen einen öffentlichen Handle, keine URL." });
+  }
+});
+
 export const pilotSetupSchema = z.object({
   organizationName: z.string().trim().min(2).max(160),
+  brandName: z.string().trim().min(2).max(160),
   workflowName: z.string().trim().min(3).max(160),
-  primaryChannel: z.enum(["microsoft_365_email", "google_email", "whatsapp", "api"]),
+  channelAccounts: z.array(pilotChannelAccountSchema).min(1).max(25),
+  selectedChannelAccountId: z.string().uuid(),
+  inventoryConfirmed: z.literal(true),
   identityProvider: z.enum(["entra", "google", "okta", "other"]),
   systemOfRecord: z.enum(["salesforce", "hubspot", "zendesk", "dynamics", "custom", "none", "other"]),
   hostingRegion: z.enum(["eu_germany", "eu_ireland", "eu_other"]),
@@ -50,7 +74,24 @@ export const pilotSetupSchema = z.object({
   technicalContactEmail: z.string().email().max(200),
   accessEnvironment: z.enum(["sandbox", "test_account", "production_approved"]),
   dataExclusionsConfirmed: z.literal(true)
-}).strict();
+}).strict().superRefine((setup, context) => {
+  const identifiers = new Set<string>();
+  for (const [index, account] of setup.channelAccounts.entries()) {
+    const key = `${account.type}:${account.identifier.trim().toLocaleLowerCase("en-US")}`;
+    if (identifiers.has(key)) {
+      context.addIssue({ code: "custom", path: ["channelAccounts", index, "identifier"], message: "Dieser Kanal wurde bereits erfasst." });
+    }
+    identifiers.add(key);
+  }
+  const selected = setup.channelAccounts.find(account => account.id === setup.selectedChannelAccountId);
+  if (!selected) {
+    context.addIssue({ code: "custom", path: ["selectedChannelAccountId"], message: "Das gewählte Pilot-Postfach gehört nicht zum Inventar." });
+  } else if (selected.type !== "email") {
+    context.addIssue({ code: "custom", path: ["selectedChannelAccountId"], message: "Nur ein E-Mail-Postfach kann für diesen Pilot gewählt werden." });
+  } else if (!selected.provider) {
+    context.addIssue({ code: "custom", path: ["channelAccounts"], message: "Für das Pilot-Postfach ist der E-Mail-Provider erforderlich." });
+  }
+});
 
 export type Session = {
   tenantId: string;

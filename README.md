@@ -61,6 +61,7 @@ Migrations are ordered, checksum-protected and serialized through a PostgreSQL a
 - sanitized integration issue queue without stored inbound payloads or inbound replay
 - managed PostgreSQL adapter, RLS migration, runtime grants and checksum migration runner
 - geschützter Fünf-Schritt-Wizard für Pilot-Ersteinrichtung mit eigener `pilot:configure`-Capability
+- tenantgebundenes Kanalinventar mit genau einem ausgewählten E-Mail-Pilotpostfach; Social-Accounts bleiben fail-closed blockiert
 - tenantgebundener, versionierter und auditierter Einrichtungsauftrag ohne Secrets oder Kommunikationsinhalte
 - executable OpenAPI 3.1 document at `/api/openapi.json`
 - persistent local database under `.data/`
@@ -81,13 +82,14 @@ The integration suite covers authentication/RBAC, signed connector ingress, conn
 
 Ein berechtigter Nutzer öffnet in der Navigation **Ersteinrichtung**. Der Wizard sammelt ausschließlich gemeinsam entscheidbare Konfigurationsangaben:
 
-- Unternehmen, Pilotprozess, zwei Teams und Startziel,
-- genau einen Eingangskanal, Zugangsumgebung und führendes System,
+- Unternehmen, Marke, Pilotprozess, zwei Teams und Startziel,
+- vollständigen Kanalbestand aus geschäftlichen E-Mail-Adressen und öffentlichen Social-Handles,
+- genau ein E-Mail-Pilotpostfach, dessen Provider, Zugangsumgebung und führendes System,
 - Identity Provider sowie geschäftliche Pilot- und Technikkontakte,
 - EU-Region, Nutzer-/Case-Volumen und Aufbewahrung,
 - Bestätigung ausgeschlossener sensibler Datenklassen.
 
-Die Aktion **Einrichtung anfordern** provisioniert nichts und aktiviert keine realen Daten. Relay zeigt anschließend die getrennten Prüfungen für PostgreSQL/RLS, OIDC, Secret-Rotation, Provideradapter, Shadow Run und Backup/Restore. Passwörter, Tokens, Client Secrets, Datenbank-URLs und Kundennachrichten gehören niemals in das Formular.
+Die Aktion **Einrichtung anfordern** provisioniert nichts und aktiviert keine realen Daten. Die übrigen E-Mail- und Social-Accounts bleiben reines Inventar. Relay zeigt anschließend die getrennten Prüfungen für PostgreSQL/RLS, OIDC, Secret-Rotation, Provideradapter, Shadow Run und Backup/Restore. Passwörter, Tokens, Client Secrets, Datenbank-URLs und Kundennachrichten gehören niemals in das Formular.
 
 Run the local outbox relay separately when needed:
 

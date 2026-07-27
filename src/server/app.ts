@@ -50,14 +50,25 @@ function requirePilotConfigurator(request: FastifyRequest) {
   if (!request.session.capabilities.includes("pilot:configure")) throw problem(403, "PILOT_CONFIGURATION_FORBIDDEN", "Diese Rolle darf keine Pilot-Einrichtung anfordern.");
 }
 
-const pilotSetupSelect = `SELECT tenant_id AS "tenantId",organization_name AS "organizationName",workflow_name AS "workflowName",
-  primary_channel AS "primaryChannel",identity_provider AS "identityProvider",system_of_record AS "systemOfRecord",
-  hosting_region AS "hostingRegion",target_start_date::text AS "targetStartDate",team_names AS "teamNames",
-  expected_users AS "expectedUsers",monthly_cases AS "monthlyCases",retention_days AS "retentionDays",
-  pilot_owner_name AS "pilotOwnerName",pilot_owner_email AS "pilotOwnerEmail",technical_contact_name AS "technicalContactName",
-  technical_contact_email AS "technicalContactEmail",access_environment AS "accessEnvironment",
-  data_exclusions_confirmed AS "dataExclusionsConfirmed",version,updated_at AS "updatedAt"
-  FROM pilot_onboarding_requests WHERE tenant_id=$1`;
+const pilotSetupSelect = `SELECT p.tenant_id AS "tenantId",p.organization_name AS "organizationName",p.brand_name AS "brandName",
+  p.workflow_name AS "workflowName",p.primary_channel AS "primaryChannel",p.identity_provider AS "identityProvider",
+  p.system_of_record AS "systemOfRecord",p.hosting_region AS "hostingRegion",p.target_start_date::text AS "targetStartDate",
+  p.team_names AS "teamNames",p.expected_users AS "expectedUsers",p.monthly_cases AS "monthlyCases",
+  p.retention_days AS "retentionDays",p.pilot_owner_name AS "pilotOwnerName",p.pilot_owner_email AS "pilotOwnerEmail",
+  p.technical_contact_name AS "technicalContactName",p.technical_contact_email AS "technicalContactEmail",
+  p.access_environment AS "accessEnvironment",p.data_exclusions_confirmed AS "dataExclusionsConfirmed",
+  p.inventory_confirmed AS "inventoryConfirmed",p.selected_channel_account_id::text AS "selectedChannelAccountId",
+  COALESCE((SELECT jsonb_agg(jsonb_build_object(
+    'id',a.id::text,'type',a.channel_type,'identifier',a.identifier,'label',a.display_label,'provider',a.email_provider
+  ) ORDER BY a.created_at,a.id) FROM pilot_channel_accounts a WHERE a.tenant_id=p.tenant_id),'[]'::jsonb) AS "channelAccounts",
+  p.version,p.updated_at AS "updatedAt"
+  FROM pilot_onboarding_requests p WHERE p.tenant_id=$1`;
+
+function primaryChannelFor(provider: "microsoft_365" | "google_workspace" | "other") {
+  if (provider === "microsoft_365") return "microsoft_365_email";
+  if (provider === "google_workspace") return "google_email";
+  return "other_email";
+}
 
 function verifyConnectorSignature(rawBody: Buffer, timestamp: string | undefined, signature: string | undefined, secret: string) {
   if (!timestamp || !signature || !/^sha256=[a-f0-9]{64}$/.test(signature)) throw problem(401, "CONNECTOR_SIGNATURE_REQUIRED", "Gültige Connector-Signatur erforderlich.");
@@ -135,23 +146,34 @@ export async function buildApp(db: Database, options: { serveWeb?: boolean; conn
     const parsed = pilotSetupSchema.safeParse(request.body);
     if (!parsed.success) throw problem(400, "PILOT_SETUP_INVALID", "Die Pilotangaben sind unvollständig oder ungültig.", parsed.error.flatten());
     const value = parsed.data;
+    const selectedAccount = value.channelAccounts.find(account => account.id === value.selectedChannelAccountId)!;
+    const primaryChannel = primaryChannelFor(selectedAccount.provider!);
     const saved = await db.withTenant(request.session.tenantId, async tx => {
       const current = (await tx.query<Row>("SELECT version FROM pilot_onboarding_requests WHERE tenant_id=$1 FOR UPDATE", [request.session.tenantId])).rows[0];
       if ((!current && expectedVersion !== 0) || (current && Number(current.version) !== expectedVersion)) throw problem(409, "VERSION_CONFLICT", "Die Ersteinrichtung wurde zwischenzeitlich geändert. Bitte neu laden.");
       if (!current) {
         await tx.query(`INSERT INTO pilot_onboarding_requests
-          (tenant_id,organization_name,workflow_name,primary_channel,identity_provider,system_of_record,hosting_region,target_start_date,team_names,
+          (tenant_id,organization_name,brand_name,workflow_name,primary_channel,identity_provider,system_of_record,hosting_region,target_start_date,team_names,
            expected_users,monthly_cases,retention_days,pilot_owner_name,pilot_owner_email,technical_contact_name,technical_contact_email,
-           access_environment,data_exclusions_confirmed,created_by_actor_id,updated_by_actor_id)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$19)`,
-          [request.session.tenantId,value.organizationName,value.workflowName,value.primaryChannel,value.identityProvider,value.systemOfRecord,value.hostingRegion,value.targetStartDate,JSON.stringify(value.teamNames),value.expectedUsers,value.monthlyCases,value.retentionDays,value.pilotOwnerName,value.pilotOwnerEmail,value.technicalContactName,value.technicalContactEmail,value.accessEnvironment,value.dataExclusionsConfirmed,request.session.actorId]);
+           access_environment,data_exclusions_confirmed,inventory_confirmed,created_by_actor_id,updated_by_actor_id)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$21)`,
+          [request.session.tenantId,value.organizationName,value.brandName,value.workflowName,primaryChannel,value.identityProvider,value.systemOfRecord,value.hostingRegion,value.targetStartDate,JSON.stringify(value.teamNames),value.expectedUsers,value.monthlyCases,value.retentionDays,value.pilotOwnerName,value.pilotOwnerEmail,value.technicalContactName,value.technicalContactEmail,value.accessEnvironment,value.dataExclusionsConfirmed,value.inventoryConfirmed,request.session.actorId]);
       } else {
-        await tx.query(`UPDATE pilot_onboarding_requests SET organization_name=$2,workflow_name=$3,primary_channel=$4,identity_provider=$5,
-          system_of_record=$6,hosting_region=$7,target_start_date=$8,team_names=$9::jsonb,expected_users=$10,monthly_cases=$11,retention_days=$12,
-          pilot_owner_name=$13,pilot_owner_email=$14,technical_contact_name=$15,technical_contact_email=$16,access_environment=$17,
-          data_exclusions_confirmed=$18,updated_by_actor_id=$19,updated_at=now(),version=version+1 WHERE tenant_id=$1`,
-          [request.session.tenantId,value.organizationName,value.workflowName,value.primaryChannel,value.identityProvider,value.systemOfRecord,value.hostingRegion,value.targetStartDate,JSON.stringify(value.teamNames),value.expectedUsers,value.monthlyCases,value.retentionDays,value.pilotOwnerName,value.pilotOwnerEmail,value.technicalContactName,value.technicalContactEmail,value.accessEnvironment,value.dataExclusionsConfirmed,request.session.actorId]);
+        await tx.query("UPDATE pilot_onboarding_requests SET selected_channel_account_id=NULL WHERE tenant_id=$1", [request.session.tenantId]);
+        await tx.query(`UPDATE pilot_onboarding_requests SET organization_name=$2,brand_name=$3,workflow_name=$4,primary_channel=$5,identity_provider=$6,
+          system_of_record=$7,hosting_region=$8,target_start_date=$9,team_names=$10::jsonb,expected_users=$11,monthly_cases=$12,retention_days=$13,
+          pilot_owner_name=$14,pilot_owner_email=$15,technical_contact_name=$16,technical_contact_email=$17,access_environment=$18,
+          data_exclusions_confirmed=$19,inventory_confirmed=$20,updated_by_actor_id=$21,updated_at=now(),version=version+1 WHERE tenant_id=$1`,
+          [request.session.tenantId,value.organizationName,value.brandName,value.workflowName,primaryChannel,value.identityProvider,value.systemOfRecord,value.hostingRegion,value.targetStartDate,JSON.stringify(value.teamNames),value.expectedUsers,value.monthlyCases,value.retentionDays,value.pilotOwnerName,value.pilotOwnerEmail,value.technicalContactName,value.technicalContactEmail,value.accessEnvironment,value.dataExclusionsConfirmed,value.inventoryConfirmed,request.session.actorId]);
+        await tx.query("DELETE FROM pilot_channel_accounts WHERE tenant_id=$1", [request.session.tenantId]);
       }
+      for (const account of value.channelAccounts) {
+        await tx.query(`INSERT INTO pilot_channel_accounts
+          (id,tenant_id,channel_type,identifier,display_label,email_provider,activation_status,created_by_actor_id,updated_by_actor_id)
+          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$8)`,
+          [account.id,request.session.tenantId,account.type,account.identifier,account.label ?? "",account.provider ?? null,account.type === "email" ? "inventory" : "blocked",request.session.actorId]);
+      }
+      await tx.query("UPDATE pilot_onboarding_requests SET selected_channel_account_id=$2 WHERE tenant_id=$1", [request.session.tenantId,value.selectedChannelAccountId]);
       await tx.query(`INSERT INTO audit_entries(id,tenant_id,category,action,actor_id,subject_type,subject_id,result,request_id,metadata)
         VALUES($1,$2,'pilot_configuration',$3,$4,'tenant',$2,'success',$5,'{}'::jsonb)`, [uuid(),request.session.tenantId,current ? "pilot_setup.updated" : "pilot_setup.submitted",request.session.actorId,request.id]);
       return (await tx.query<Row>(pilotSetupSelect, [request.session.tenantId])).rows[0];

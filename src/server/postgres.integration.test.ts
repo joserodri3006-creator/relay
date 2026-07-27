@@ -62,7 +62,7 @@ run("PostgreSQL tenant isolation", () => {
   });
 
   it("erzwingt RLS auf allen tenantgebundenen Fachtabellen", async () => {
-    const expected = ["actor_capabilities","actor_identities","actors","audit_entries","commitments","conversations","domain_events","handoffs","ingress_receipts","integration_issues","interactions","outbox_events","pilot_onboarding_requests","timeline_events"];
+    const expected = ["actor_capabilities","actor_identities","actors","audit_entries","commitments","conversations","domain_events","handoffs","ingress_receipts","integration_issues","interactions","outbox_events","pilot_channel_accounts","pilot_onboarding_requests","timeline_events"];
     const rows = await runtime.query(`SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
       WHERE n.nspname='public' AND c.relname=ANY($1::text[]) AND c.relrowsecurity AND c.relforcerowsecurity ORDER BY c.relname`, [expected]);
     expect(rows.rows.map(row => row.relname)).toEqual(expected);

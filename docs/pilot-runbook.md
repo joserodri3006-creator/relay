@@ -20,7 +20,7 @@ Reale Kommunikationsdaten sind vor Phase 4 verboten.
 
 Die Navigation **Ersteinrichtung** ist nur mit `pilot:configure` sichtbar. Der Wizard erfasst den gemeinsam vereinbarten Pilotumfang und speichert einen versionierten Auftrag im Tenant. Die abschließende Aktion heißt bewusst **Einrichtung anfordern**.
 
-Der Auftrag darf weder Datenbank-/Cloud-Provisionierung noch Connectoraktivierung oder Go-live auslösen. Das vorhandene Bootstrap-Skript bleibt ein getrennter, privilegierter Deployment-Schritt. Formulardaten werden nicht in Audit-Metadaten, Domain Events oder Outbox kopiert.
+Der Auftrag darf weder Datenbank-/Cloud-Provisionierung noch Connectoraktivierung oder Go-live auslösen. Das Kanalinventar dokumentiert alle bekannten geschäftlichen Endpunkte, wählt aber genau ein E-Mail-Postfach als Pilotkandidaten. Weitere Postfächer bleiben `inventory`; Instagram und TikTok bleiben `blocked`. Das vorhandene Bootstrap-Skript bleibt ein getrennter, privilegierter Deployment-Schritt. Formulardaten werden nicht in Audit-Metadaten, Domain Events oder Outbox kopiert.
 
 ## Technisches Deployment
 
