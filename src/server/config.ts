@@ -12,6 +12,9 @@ const environmentSchema = z.object({
   OIDC_CLIENT_ID: z.string().min(1).optional(),
   OIDC_SCOPES: z.string().default("openid profile"),
   PUBLIC_APP_URL: z.string().url().optional(),
+  GOOGLE_OAUTH_CLIENT_ID: z.string().min(1).optional(),
+  GOOGLE_OAUTH_CLIENT_SECRET: z.string().min(1).optional(),
+  GOOGLE_OAUTH_REDIRECT_URI: z.string().url().optional(),
   CORS_ORIGINS: z.string().optional(),
   CONNECTOR_SECRET: z.string().min(32).optional(),
   CONNECTOR_SECRET_REF: z.string().min(1).default("connector/demo"),
@@ -38,6 +41,10 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env, purpose
   }
   if (purpose === "api" && authMode === "oidc" && (!parsed.OIDC_ISSUER || !parsed.OIDC_AUDIENCE || !parsed.OIDC_JWKS_URL || !parsed.OIDC_CLIENT_ID || !parsed.PUBLIC_APP_URL)) {
     throw new Error("OIDC_ISSUER, OIDC_AUDIENCE, OIDC_JWKS_URL, OIDC_CLIENT_ID und PUBLIC_APP_URL sind für OIDC erforderlich.");
+  }
+  const googleOAuthValues = [parsed.GOOGLE_OAUTH_CLIENT_ID, parsed.GOOGLE_OAUTH_CLIENT_SECRET, parsed.GOOGLE_OAUTH_REDIRECT_URI];
+  if (googleOAuthValues.some(Boolean) && !googleOAuthValues.every(Boolean)) {
+    throw new Error("GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET und GOOGLE_OAUTH_REDIRECT_URI müssen gemeinsam gesetzt sein.");
   }
   return { ...parsed, authMode, corsOrigins, connectorSecret: parsed.CONNECTOR_SECRET ?? parsed.CONNECTOR_SECRET_DEMO };
 }
