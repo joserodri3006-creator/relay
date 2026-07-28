@@ -7,9 +7,10 @@ import fastifyStatic from "@fastify/static";
 import rateLimit from "@fastify/rate-limit";
 import helmet from "@fastify/helmet";
 import type { Database } from "./db.js";
-import { commitmentSchema, commitmentUpdateSchema, connectorIngressSchema, handoffDecisionSchema, handoffSchema, ingressSchema, ownerSchema, pilotSetupSchema, requireTransition, statusSchema, type CaseStatus, type Session } from "./domain.js";
+import { commitmentSchema, commitmentUpdateSchema, connectorIngressSchema, emailProviderDetectionSchema, handoffDecisionSchema, handoffSchema, ingressSchema, ownerSchema, pilotSetupSchema, requireTransition, statusSchema, type CaseStatus, type Session } from "./domain.js";
 import { recordDomainChange } from "./eventing.js";
 import { openapiDocument } from "./openapi.js";
+import { EmailProviderDetector, EmailProviderLookupTemporaryError, type EmailProviderDetection } from "./email-provider.js";
 import { processCanonicalIngress } from "./ingress-service.js";
 import { createDemoAuthenticator, type Authenticator } from "./auth.js";
 
@@ -60,15 +61,21 @@ const pilotSetupSelect = `SELECT p.tenant_id AS "tenantId",p.organization_name A
   p.inventory_confirmed AS "inventoryConfirmed",p.selected_channel_account_id::text AS "selectedChannelAccountId",
   COALESCE((SELECT jsonb_agg(jsonb_build_object(
     'id',a.id::text,'type',a.channel_type,'identifier',a.identifier,'label',a.display_label,
-    'provider',a.email_provider,'providerName',a.email_provider_name
+    'providerKey',a.provider_key,'mailProductKey',a.mail_product_key,'providerName',a.email_provider_name
   ) ORDER BY a.created_at,a.id) FROM pilot_channel_accounts a WHERE a.tenant_id=p.tenant_id),'[]'::jsonb) AS "channelAccounts",
   p.version,p.updated_at AS "updatedAt"
   FROM pilot_onboarding_requests p WHERE p.tenant_id=$1`;
 
-function primaryChannelFor(provider: "microsoft_365" | "google_workspace" | "other") {
-  if (provider === "microsoft_365") return "microsoft_365_email";
-  if (provider === "google_workspace") return "google_email";
+function primaryChannelFor(product: "gmail" | "google_workspace" | "microsoft_365" | "other") {
+  if (product === "microsoft_365") return "microsoft_365_email";
+  if (product === "gmail" || product === "google_workspace") return "google_email";
   return "other_email";
+}
+
+function legacyEmailProvider(providerKey: "google" | "microsoft" | "other" | undefined) {
+  if (providerKey === "google") return "google_workspace";
+  if (providerKey === "microsoft") return "microsoft_365";
+  return providerKey;
 }
 
 function verifyConnectorSignature(rawBody: Buffer, timestamp: string | undefined, signature: string | undefined, secret: string) {
@@ -81,11 +88,13 @@ function verifyConnectorSignature(rawBody: Buffer, timestamp: string | undefined
 
 type AuthPublicConfig = { mode: "demo" } | { mode: "oidc"; authority: string; clientId: string; scope: string; redirectUri: string; postLogoutRedirectUri: string };
 
-export async function buildApp(db: Database, options: { serveWeb?: boolean; connectorSecrets?: Record<string, string>; authenticate?: Authenticator; corsOrigins?: string[]; logger?: boolean; expectedMigration?: string; authPublicConfig?: AuthPublicConfig; enableTestIngress?: boolean } = {}) {
+export async function buildApp(db: Database, options: { serveWeb?: boolean; connectorSecrets?: Record<string, string>; authenticate?: Authenticator; corsOrigins?: string[]; logger?: boolean; expectedMigration?: string; authPublicConfig?: AuthPublicConfig; enableTestIngress?: boolean; detectEmailProvider?: (domain: string) => Promise<EmailProviderDetection> } = {}) {
   const app = options.logger
     ? Fastify({ logger: { level: "info", redact: ["req.headers.authorization", "req.headers.x-relay-signature"] }, disableRequestLogging: true, bodyLimit: 1024 * 1024 })
     : Fastify({ logger: false, bodyLimit: 1024 * 1024 });
   const authenticate = options.authenticate ?? createDemoAuthenticator();
+  const providerDetector = new EmailProviderDetector();
+  const detectEmailProvider = options.detectEmailProvider ?? providerDetector.detect.bind(providerDetector);
   app.removeContentTypeParser("application/json");
   app.addContentTypeParser("application/json", { parseAs: "buffer" }, (request, body, done) => {
     request.rawBody = Buffer.isBuffer(body) ? body : Buffer.from(body);
@@ -141,6 +150,20 @@ export async function buildApp(db: Database, options: { serveWeb?: boolean; conn
     ], nextStep: setup ? "Relay prüft Zugang, Identität und Sicherheitsgates. Reale Daten bleiben gesperrt." : "Pilotangaben vervollständigen und Einrichtung anfordern." };
   });
 
+  app.post("/api/v1/email-provider-detection", { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } }, async request => {
+    requirePilotConfigurator(request);
+    const parsed = emailProviderDetectionSchema.safeParse(request.body);
+    if (!parsed.success) throw problem(400, "EMAIL_DOMAIN_INVALID", "Die E-Mail-Domain ist ungültig.", parsed.error.flatten());
+    try {
+      return await detectEmailProvider(parsed.data.domain);
+    } catch (error) {
+      if (error instanceof EmailProviderLookupTemporaryError) {
+        throw problem(503, "EMAIL_PROVIDER_LOOKUP_TEMPORARY_FAILURE", "Die Providerprüfung ist vorübergehend nicht verfügbar.");
+      }
+      throw problem(400, "EMAIL_DOMAIN_INVALID", "Die E-Mail-Domain ist ungültig.");
+    }
+  });
+
   app.put("/api/v1/pilot-onboarding", async (request, reply) => {
     requirePilotConfigurator(request);
     const expectedVersion = parseVersion(request, "Ersteinrichtungs");
@@ -148,7 +171,7 @@ export async function buildApp(db: Database, options: { serveWeb?: boolean; conn
     if (!parsed.success) throw problem(400, "PILOT_SETUP_INVALID", "Die Pilotangaben sind unvollständig oder ungültig.", parsed.error.flatten());
     const value = parsed.data;
     const selectedAccount = value.channelAccounts.find(account => account.id === value.selectedChannelAccountId)!;
-    const primaryChannel = primaryChannelFor(selectedAccount.provider!);
+    const primaryChannel = primaryChannelFor(selectedAccount.mailProductKey!);
     const saved = await db.withTenant(request.session.tenantId, async tx => {
       const current = (await tx.query<Row>("SELECT version FROM pilot_onboarding_requests WHERE tenant_id=$1 FOR UPDATE", [request.session.tenantId])).rows[0];
       if ((!current && expectedVersion !== 0) || (current && Number(current.version) !== expectedVersion)) throw problem(409, "VERSION_CONFLICT", "Die Ersteinrichtung wurde zwischenzeitlich geändert. Bitte neu laden.");
@@ -170,9 +193,9 @@ export async function buildApp(db: Database, options: { serveWeb?: boolean; conn
       }
       for (const account of value.channelAccounts) {
         await tx.query(`INSERT INTO pilot_channel_accounts
-          (id,tenant_id,channel_type,identifier,display_label,email_provider,email_provider_name,activation_status,created_by_actor_id,updated_by_actor_id)
-          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$9)`,
-          [account.id,request.session.tenantId,account.type,account.identifier,account.label ?? "",account.provider ?? null,account.providerName ?? null,account.type === "email" ? "inventory" : "blocked",request.session.actorId]);
+          (id,tenant_id,channel_type,identifier,display_label,email_provider,provider_key,mail_product_key,email_provider_name,activation_status,created_by_actor_id,updated_by_actor_id)
+          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11)`,
+          [account.id,request.session.tenantId,account.type,account.identifier,account.label ?? "",legacyEmailProvider(account.providerKey) ?? null,account.providerKey ?? null,account.mailProductKey ?? null,account.providerName ?? null,account.type === "email" ? "inventory" : "blocked",request.session.actorId]);
       }
       await tx.query("UPDATE pilot_onboarding_requests SET selected_channel_account_id=$2 WHERE tenant_id=$1", [request.session.tenantId,value.selectedChannelAccountId]);
       await tx.query(`INSERT INTO audit_entries(id,tenant_id,category,action,actor_id,subject_type,subject_id,result,request_id,metadata)

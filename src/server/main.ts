@@ -24,7 +24,7 @@ const app = await buildApp(db, {
   authenticate,
   corsOrigins: config.corsOrigins,
   logger: config.NODE_ENV === "production",
-  expectedMigration: config.NODE_ENV === "production" ? "008_email_provider_name.sql" : undefined,
+  expectedMigration: config.NODE_ENV === "production" ? "009_email_provider_model.sql" : undefined,
   enableTestIngress: config.NODE_ENV !== "production",
   authPublicConfig: config.authMode === "oidc" ? {
     mode: "oidc", authority: config.OIDC_ISSUER!, clientId: config.OIDC_CLIENT_ID!, scope: config.OIDC_SCOPES,

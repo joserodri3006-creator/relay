@@ -32,28 +32,44 @@ export const handoffSchema = z.object({
   dueAt: z.string().datetime().nullable().optional()
 });
 export const handoffDecisionSchema = z.object({ decision: z.enum(["accepted", "declined", "cancelled"]) });
+export const emailProviderDetectionSchema = z.object({
+  domain: z.string().trim().min(3).max(253)
+}).strict();
 export const pilotChannelAccountSchema = z.object({
   id: z.string().uuid(),
   type: z.enum(["email", "instagram", "tiktok"]),
   identifier: z.string().trim().min(2).max(200),
   label: z.string().trim().max(120).optional().default(""),
-  provider: z.enum(["microsoft_365", "google_workspace", "other"]).optional(),
+  providerKey: z.enum(["google", "microsoft", "other"]).optional(),
+  mailProductKey: z.enum(["gmail", "google_workspace", "microsoft_365", "other"]).optional(),
   providerName: z.string().trim().min(2).max(120).optional()
 }).strict().superRefine((account, context) => {
   if (account.type === "email") {
     if (!z.string().email().safeParse(account.identifier).success) {
       context.addIssue({ code: "custom", path: ["identifier"], message: "Für E-Mail-Kanäle ist eine gültige geschäftliche Adresse erforderlich." });
     }
-    if (account.provider === "other" && !account.providerName) {
+    if ((account.providerKey === undefined) !== (account.mailProductKey === undefined)) {
+      context.addIssue({ code: "custom", path: ["providerKey"], message: "Anbieter und Mailprodukt müssen gemeinsam angegeben werden." });
+    }
+    if (account.providerKey === "google" && !["gmail", "google_workspace"].includes(account.mailProductKey ?? "")) {
+      context.addIssue({ code: "custom", path: ["mailProductKey"], message: "Dieses Mailprodukt gehört nicht zu Google." });
+    }
+    if (account.providerKey === "microsoft" && account.mailProductKey !== "microsoft_365") {
+      context.addIssue({ code: "custom", path: ["mailProductKey"], message: "Dieses Mailprodukt gehört nicht zu Microsoft." });
+    }
+    if (account.providerKey === "other" && account.mailProductKey !== "other") {
+      context.addIssue({ code: "custom", path: ["mailProductKey"], message: "Für andere Anbieter muss das Mailprodukt „other“ sein." });
+    }
+    if (account.providerKey === "other" && !account.providerName) {
       context.addIssue({ code: "custom", path: ["providerName"], message: "Bitte den konkreten E-Mail-Anbieter angeben." });
     }
-    if (account.provider !== "other" && account.providerName !== undefined) {
+    if (account.providerKey !== "other" && account.providerName !== undefined) {
       context.addIssue({ code: "custom", path: ["providerName"], message: "Ein freier Anbietername ist nur bei „Anderer Provider“ zulässig." });
     }
     return;
   }
-  if (account.provider !== undefined || account.providerName !== undefined) {
-    context.addIssue({ code: "custom", path: ["provider"], message: "Ein E-Mail-Provider ist nur für E-Mail-Accounts zulässig." });
+  if (account.providerKey !== undefined || account.mailProductKey !== undefined || account.providerName !== undefined) {
+    context.addIssue({ code: "custom", path: ["providerKey"], message: "Ein E-Mail-Provider ist nur für E-Mail-Accounts zulässig." });
   }
   if (!/^@?[A-Za-z0-9._-]{2,100}$/.test(account.identifier)) {
     context.addIssue({ code: "custom", path: ["identifier"], message: "Social-Kanäle benötigen einen öffentlichen Handle, keine URL." });
@@ -95,7 +111,7 @@ export const pilotSetupSchema = z.object({
     context.addIssue({ code: "custom", path: ["selectedChannelAccountId"], message: "Das gewählte Pilot-Postfach gehört nicht zum Inventar." });
   } else if (selected.type !== "email") {
     context.addIssue({ code: "custom", path: ["selectedChannelAccountId"], message: "Nur ein E-Mail-Postfach kann für diesen Pilot gewählt werden." });
-  } else if (!selected.provider) {
+  } else if (!selected.providerKey || !selected.mailProductKey) {
     context.addIssue({ code: "custom", path: ["channelAccounts"], message: "Für das Pilot-Postfach ist der E-Mail-Provider erforderlich." });
   }
 });

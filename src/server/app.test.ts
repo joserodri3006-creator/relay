@@ -21,10 +21,10 @@ const event = {
 const pilotSetup = {
   organizationName: "R&C Lifestyle", brandName: "Blazed Outfitters", workflowName: "Kundenanfrage bis bestätigte Übergabe",
   channelAccounts: [
-    { id: "10000000-0000-4000-8000-000000000001", type: "email", identifier: "support@blazed.example", label: "Kundenservice", provider: "microsoft_365" },
+    { id: "10000000-0000-4000-8000-000000000001", type: "email", identifier: "support@blazed.example", label: "Kundenservice", providerKey: "microsoft", mailProductKey: "microsoft_365" },
     { id: "10000000-0000-4000-8000-000000000002", type: "email", identifier: "orders@blazed.example", label: "Bestellungen" },
     { id: "10000000-0000-4000-8000-000000000003", type: "email", identifier: "returns@blazed.example", label: "Retouren" },
-    { id: "10000000-0000-4000-8000-000000000004", type: "email", identifier: "info@blazed.example", label: "Allgemein", provider: "other", providerName: "ALL-INKL" },
+    { id: "10000000-0000-4000-8000-000000000004", type: "email", identifier: "info@blazed.example", label: "Allgemein", providerKey: "other", mailProductKey: "other", providerName: "ALL-INKL" },
     { id: "10000000-0000-4000-8000-000000000005", type: "instagram", identifier: "@blazedoutfitters", label: "Hauptaccount" },
     { id: "10000000-0000-4000-8000-000000000006", type: "instagram", identifier: "@blazedoutfitters.de", label: "Deutschland" },
     { id: "10000000-0000-4000-8000-000000000007", type: "instagram", identifier: "@blazed.community", label: "Community" },
@@ -40,7 +40,22 @@ const pilotSetup = {
 describe("Case Control vertical slice", () => {
   let db: Database;
   let app: FastifyInstance;
-  beforeEach(async () => { db = await createDatabase(); app = await buildApp(db, { connectorSecrets: { "connector/demo": "test-secret" } }); });
+  beforeEach(async () => {
+    db = await createDatabase();
+    app = await buildApp(db, {
+      connectorSecrets: { "connector/demo": "test-secret" },
+      detectEmailProvider: async domain => ({
+        domain,
+        providerKey: "google",
+        productKey: "gmail",
+        providerName: "Google Gmail",
+        authorizationProfile: "google_gmail_oauth",
+        confidence: "certain",
+        source: "well_known_domain",
+        evidence: []
+      })
+    });
+  });
   afterEach(async () => { await app.close(); await db.close(); });
 
   it("fordert Authentifizierung und schützt Mutationen vor Viewern", async () => {
@@ -214,6 +229,15 @@ describe("Case Control vertical slice", () => {
     expect(response.json().paths["/api/v1/cases/{id}/handoffs"]).toBeDefined();
   });
 
+  it("ermittelt den Provider nur aus einer Domain und nur für Pilot-Konfiguratoren", async () => {
+    expect((await app.inject({ method: "POST", url: "/api/v1/email-provider-detection", headers: teammate, payload: { domain: "gmail.com" } })).statusCode).toBe(403);
+    const detected = await app.inject({ method: "POST", url: "/api/v1/email-provider-detection", headers: editor, payload: { domain: "gmail.com" } });
+    expect(detected.statusCode).toBe(200);
+    expect(detected.json()).toMatchObject({ domain: "gmail.com", providerKey: "google", productKey: "gmail", confidence: "certain" });
+    expect(JSON.stringify(detected.json())).not.toContain("blazedoutfitters");
+    expect((await app.inject({ method: "POST", url: "/api/v1/email-provider-detection", headers: editor, payload: { domain: "gmail.com", email: "secret@gmail.com" } })).statusCode).toBe(400);
+  });
+
   it("trennt Liveness, Readiness und öffentliche Auth-Konfiguration", async () => {
     expect((await app.inject({ method: "GET", url: "/health/live" })).json()).toEqual({ status: "live" });
     expect((await app.inject({ method: "GET", url: "/health/ready" })).json()).toEqual({ status: "ready" });
@@ -252,7 +276,7 @@ describe("Case Control vertical slice", () => {
       organizationName: "R&C Lifestyle", brandName: "Blazed Outfitters", selectedChannelAccountId: pilotSetup.selectedChannelAccountId,
       channelAccounts: expect.arrayContaining([
         expect.objectContaining({ identifier: "support@blazed.example", type: "email" }),
-        expect.objectContaining({ identifier: "info@blazed.example", provider: "other", providerName: "ALL-INKL" })
+        expect.objectContaining({ identifier: "info@blazed.example", providerKey: "other", mailProductKey: "other", providerName: "ALL-INKL" })
       ]), version: 1
     } });
     expect(created.json().setup.channelAccounts).toHaveLength(8);
