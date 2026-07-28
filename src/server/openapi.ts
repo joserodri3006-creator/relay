@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { commitmentSchema, commitmentUpdateSchema, connectorIngressSchema, handoffDecisionSchema, handoffSchema, ingressSchema, ownerSchema, pilotSetupSchema, statusSchema } from "./domain.js";
+import { commitmentSchema, commitmentUpdateSchema, connectorIngressSchema, emailProviderDetectionSchema, handoffDecisionSchema, handoffSchema, ingressSchema, ownerSchema, pilotSetupSchema, statusSchema } from "./domain.js";
 
 const schema = (value: z.ZodType) => z.toJSONSchema(value, { target: "draft-7" });
 const problem = {
@@ -24,6 +24,20 @@ export const openapiDocument = {
     "/api/v1/pilot-onboarding": {
       get: { tags: ["Pilot Onboarding"], summary: "Pilot-Einrichtungsauftrag und offene Relay-Gates lesen", security: auth, responses: { "200": response("Einrichtungsstand"), "403": response("Capability fehlt", problem) } },
       put: { tags: ["Pilot Onboarding"], summary: "Pilot-Einrichtung anfordern oder aktualisieren", security: auth, parameters: mutationHeaders, requestBody: jsonBody(schema(pilotSetupSchema)), responses: { "201": response("Einrichtung angefordert"), "200": response("Einrichtung aktualisiert"), "400": response("Ungültige Angaben", problem), "409": response("Versionskonflikt", problem) } }
+    },
+    "/api/v1/email-provider-detection": {
+      post: {
+        tags: ["Pilot Onboarding"],
+        summary: "E-Mail-Provider aus öffentlichen Domain- und MX-Daten empfehlen",
+        security: auth,
+        requestBody: jsonBody(schema(emailProviderDetectionSchema)),
+        responses: {
+          "200": response("Bestätigungspflichtige Provider-Empfehlung"),
+          "400": response("Ungültige Domain", problem),
+          "403": response("Capability fehlt", problem),
+          "503": response("DNS-Prüfung vorübergehend nicht verfügbar", problem)
+        }
+      }
     },
     "/api/v1/cases": { get: { tags: ["Cases"], summary: "Cases nach Attention View auflisten", security: auth, parameters: [{ name: "view", in: "query", schema: { type: "string", enum: ["mine", "unassigned", "active", "resolved"] } }], responses: { "200": response("Case-Liste", { type: "array", items: { type: "object" } }) } } },
     "/api/v1/cases/{id}": { get: { tags: ["Cases"], summary: "Case mit Timeline lesen", security: auth, parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }], responses: { "200": response("Case"), "404": response("Nicht gefunden", problem) } } },

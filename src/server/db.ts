@@ -129,7 +129,8 @@ export async function createDatabase(path = "memory://") {
     );
     CREATE TABLE IF NOT EXISTS pilot_channel_accounts (
       id uuid PRIMARY KEY, tenant_id uuid NOT NULL, channel_type text NOT NULL CHECK (channel_type IN ('email','instagram','tiktok')),
-      identifier text NOT NULL, display_label text NOT NULL DEFAULT '', email_provider text NULL, email_provider_name text NULL,
+      identifier text NOT NULL, display_label text NOT NULL DEFAULT '', email_provider text NULL,
+      provider_key text NULL, mail_product_key text NULL, email_provider_name text NULL,
       activation_status text NOT NULL CHECK (activation_status IN ('inventory','blocked')),
       created_by_actor_id uuid NOT NULL, updated_by_actor_id uuid NOT NULL,
       created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
@@ -160,6 +161,8 @@ export async function createDatabase(path = "memory://") {
     ALTER TABLE pilot_onboarding_requests ADD COLUMN IF NOT EXISTS inventory_confirmed boolean NOT NULL DEFAULT false;
     ALTER TABLE pilot_onboarding_requests ADD COLUMN IF NOT EXISTS selected_channel_account_id uuid NULL;
     ALTER TABLE pilot_channel_accounts ADD COLUMN IF NOT EXISTS email_provider_name text NULL;
+    ALTER TABLE pilot_channel_accounts ADD COLUMN IF NOT EXISTS provider_key text NULL;
+    ALTER TABLE pilot_channel_accounts ADD COLUMN IF NOT EXISTS mail_product_key text NULL;
     CREATE UNIQUE INDEX IF NOT EXISTS idx_ingress_connector_event ON ingress_receipts(tenant_id,connector_id,provider_event_id);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_interaction_connector_event ON interactions(tenant_id,connector_id,provider_event_id);
   `);
