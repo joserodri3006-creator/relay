@@ -137,6 +137,26 @@ export async function createDatabase(path = "memory://") {
       UNIQUE (tenant_id,id), UNIQUE (tenant_id,channel_type,identifier),
       FOREIGN KEY (tenant_id) REFERENCES pilot_onboarding_requests(tenant_id) ON DELETE CASCADE
     );
+    CREATE TABLE IF NOT EXISTS channel_authorizations (
+      id uuid PRIMARY KEY, tenant_id uuid NOT NULL, channel_account_id uuid NOT NULL,
+      provider text NOT NULL CHECK (provider IN ('google')),
+      status text NOT NULL CHECK (status IN ('not_connected','pending','connected','error','revoked')),
+      expected_identifier text NOT NULL, authorized_identifier text NULL, provider_subject text NULL,
+      secret_ref text NULL, granted_scopes jsonb NOT NULL DEFAULT '[]'::jsonb,
+      error_code text NULL, version integer NOT NULL DEFAULT 1,
+      created_by_actor_id uuid NOT NULL, updated_by_actor_id uuid NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
+      UNIQUE (tenant_id,channel_account_id,provider),
+      FOREIGN KEY (tenant_id,channel_account_id) REFERENCES pilot_channel_accounts(tenant_id,id) ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS oauth_authorization_flows (
+      id uuid PRIMARY KEY, tenant_id uuid NOT NULL, authorization_id uuid NOT NULL,
+      actor_id uuid NOT NULL, state_hash text NOT NULL UNIQUE, pkce_secret_ref text NOT NULL,
+      status text NOT NULL CHECK (status IN ('pending','consumed','expired')),
+      expires_at timestamptz NOT NULL, created_at timestamptz NOT NULL DEFAULT now(),
+      consumed_at timestamptz NULL,
+      FOREIGN KEY (authorization_id) REFERENCES channel_authorizations(id) ON DELETE CASCADE
+    );
     CREATE TABLE IF NOT EXISTS ingress_receipts (
       id uuid PRIMARY KEY, tenant_id uuid NOT NULL, connector_id text NOT NULL, provider_event_id text NOT NULL,
       payload_hash text NOT NULL, conversation_id uuid NULL, interaction_id uuid NULL,
