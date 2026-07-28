@@ -19,8 +19,19 @@ const event = {
   body: "Bitte bis 14 Uhr zurückrufen."
 };
 const pilotSetup = {
-  organizationName: "Muster Service GmbH", workflowName: "Störungsmeldung bis bestätigte Übergabe",
-  primaryChannel: "microsoft_365_email", identityProvider: "entra", systemOfRecord: "dynamics", hostingRegion: "eu_germany",
+  organizationName: "R&C Lifestyle", brandName: "Blazed Outfitters", workflowName: "Kundenanfrage bis bestätigte Übergabe",
+  channelAccounts: [
+    { id: "10000000-0000-4000-8000-000000000001", type: "email", identifier: "support@blazed.example", label: "Kundenservice", provider: "microsoft_365" },
+    { id: "10000000-0000-4000-8000-000000000002", type: "email", identifier: "orders@blazed.example", label: "Bestellungen" },
+    { id: "10000000-0000-4000-8000-000000000003", type: "email", identifier: "returns@blazed.example", label: "Retouren" },
+    { id: "10000000-0000-4000-8000-000000000004", type: "email", identifier: "info@blazed.example", label: "Allgemein", provider: "other", providerName: "ALL-INKL" },
+    { id: "10000000-0000-4000-8000-000000000005", type: "instagram", identifier: "@blazedoutfitters", label: "Hauptaccount" },
+    { id: "10000000-0000-4000-8000-000000000006", type: "instagram", identifier: "@blazedoutfitters.de", label: "Deutschland" },
+    { id: "10000000-0000-4000-8000-000000000007", type: "instagram", identifier: "@blazed.community", label: "Community" },
+    { id: "10000000-0000-4000-8000-000000000008", type: "tiktok", identifier: "@blazedoutfitters", label: "TikTok" }
+  ],
+  selectedChannelAccountId: "10000000-0000-4000-8000-000000000001", inventoryConfirmed: true,
+  identityProvider: "entra", systemOfRecord: "none", hostingRegion: "eu_germany",
   targetStartDate: "2026-08-15", teamNames: ["Serviceannahme", "Außendienst"], expectedUsers: 8, monthlyCases: 500, retentionDays: 30,
   pilotOwnerName: "Anna Beispiel", pilotOwnerEmail: "anna@example.test", technicalContactName: "Tom Technik", technicalContactEmail: "tom@example.test",
   accessEnvironment: "sandbox", dataExclusionsConfirmed: true
@@ -222,12 +233,37 @@ describe("Case Control vertical slice", () => {
     expect((await app.inject({ method: "GET", url: "/api/v1/pilot-onboarding", headers: teammate })).statusCode).toBe(403);
     const invalid = await app.inject({ method: "PUT", url: "/api/v1/pilot-onboarding", headers: { ...editor, "if-match": "0" }, payload: { ...pilotSetup, clientSecret: "should-never-be-accepted" } });
     expect(invalid.statusCode).toBe(400);
+    const socialSelection = await app.inject({ method: "PUT", url: "/api/v1/pilot-onboarding", headers: { ...editor, "if-match": "0" }, payload: { ...pilotSetup, selectedChannelAccountId: pilotSetup.channelAccounts[4]!.id } });
+    expect(socialSelection.statusCode).toBe(400);
+    const duplicate = await app.inject({ method: "PUT", url: "/api/v1/pilot-onboarding", headers: { ...editor, "if-match": "0" }, payload: {
+      ...pilotSetup, channelAccounts: [...pilotSetup.channelAccounts, { ...pilotSetup.channelAccounts[0], id: "10000000-0000-4000-8000-000000000099", identifier: "SUPPORT@BLAZED.EXAMPLE" }]
+    } });
+    expect(duplicate.statusCode).toBe(400);
+    const unnamedProvider = await app.inject({ method: "PUT", url: "/api/v1/pilot-onboarding", headers: { ...editor, "if-match": "0" }, payload: {
+      ...pilotSetup,
+      channelAccounts: pilotSetup.channelAccounts.map(account => account.id === "10000000-0000-4000-8000-000000000004"
+        ? { ...account, providerName: undefined }
+        : account)
+    } });
+    expect(unnamedProvider.statusCode).toBe(400);
     const created = await app.inject({ method: "PUT", url: "/api/v1/pilot-onboarding", headers: { ...editor, "if-match": "0" }, payload: pilotSetup });
     expect(created.statusCode).toBe(201);
-    expect(created.json()).toMatchObject({ state: "relay_review_required", setup: { organizationName: "Muster Service GmbH", version: 1 } });
+    expect(created.json()).toMatchObject({ state: "relay_review_required", setup: {
+      organizationName: "R&C Lifestyle", brandName: "Blazed Outfitters", selectedChannelAccountId: pilotSetup.selectedChannelAccountId,
+      channelAccounts: expect.arrayContaining([
+        expect.objectContaining({ identifier: "support@blazed.example", type: "email" }),
+        expect.objectContaining({ identifier: "info@blazed.example", provider: "other", providerName: "ALL-INKL" })
+      ]), version: 1
+    } });
+    expect(created.json().setup.channelAccounts).toHaveLength(8);
     expect(JSON.stringify(created.json())).not.toContain("clientSecret");
     const loaded = await app.inject({ method: "GET", url: "/api/v1/pilot-onboarding", headers: editor });
-    expect(loaded.json()).toMatchObject({ setup: { teamNames: ["Serviceannahme", "Außendienst"] }, relayGates: expect.arrayContaining(["managed_postgres_rls", "shadow_run_100"]) });
+    expect(loaded.json()).toMatchObject({ setup: { teamNames: ["Serviceannahme", "Außendienst"], inventoryConfirmed: true }, relayGates: expect.arrayContaining(["managed_postgres_rls", "shadow_run_100"]) });
+    const storedAccounts = await db.query<{ channel_type: string; activation_status: string }>("SELECT channel_type,activation_status FROM pilot_channel_accounts ORDER BY channel_type");
+    expect(storedAccounts.rows.filter(account => account.channel_type === "email")).toHaveLength(4);
+    expect(storedAccounts.rows.filter(account => account.channel_type === "instagram")).toHaveLength(3);
+    expect(storedAccounts.rows.filter(account => account.channel_type === "tiktok")).toHaveLength(1);
+    expect(storedAccounts.rows.filter(account => account.channel_type !== "email").every(account => account.activation_status === "blocked")).toBe(true);
     const stale = await app.inject({ method: "PUT", url: "/api/v1/pilot-onboarding", headers: { ...editor, "if-match": "0" }, payload: pilotSetup });
     expect(stale.statusCode).toBe(409);
     const audit = await db.query<{ action: string; metadata: Record<string,unknown> }>("SELECT action,metadata FROM audit_entries WHERE category='pilot_configuration'");

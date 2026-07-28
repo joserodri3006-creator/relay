@@ -9,7 +9,7 @@ const problem = {
 const auth = [{ bearerAuth: [] }];
 const jsonBody = (bodySchema: object) => ({ required: true, content: { "application/json": { schema: bodySchema } } });
 const response = (description: string, bodySchema: object = { type: "object" }) => ({ description, content: { "application/json": { schema: bodySchema } } });
-const mutationHeaders = [{ name: "If-Match", in: "header", required: true, schema: { type: "integer" }, description: "Aktuelle Conversation-Version" }];
+const mutationHeaders = [{ name: "If-Match", in: "header", required: true, schema: { type: "integer" }, description: "Aktuelle Aggregate-Version" }];
 
 export const openapiDocument = {
   openapi: "3.1.0",
