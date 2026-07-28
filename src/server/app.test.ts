@@ -4,6 +4,7 @@ import type { FastifyInstance } from "fastify";
 import { buildApp } from "./app.js";
 import { createDatabase, ids, type Database } from "./db.js";
 import { OutboxWorker } from "./outbox.js";
+import { InMemorySecretVault, gmailReadOnlyScope, type GoogleOAuthGateway } from "./google-oauth.js";
 
 const editor = { authorization: "Bearer demo-editor", "content-type": "application/json" };
 const viewer = { authorization: "Bearer demo-viewer", "content-type": "application/json" };
@@ -40,10 +41,30 @@ const pilotSetup = {
 describe("Case Control vertical slice", () => {
   let db: Database;
   let app: FastifyInstance;
+  let oauthIdentityEmail: string;
+  let revokedToken: string | null;
   beforeEach(async () => {
     db = await createDatabase();
+    oauthIdentityEmail = "blazedoutfitters@gmail.com";
+    revokedToken = null;
+    const googleOAuth: GoogleOAuthGateway = {
+      configured: true,
+      authorizationUrl: ({ state, codeChallenge, loginHint }) => `https://accounts.example.test/authorize?state=${encodeURIComponent(state)}&code_challenge=${encodeURIComponent(codeChallenge)}&login_hint=${encodeURIComponent(loginHint)}`,
+      exchangeCode: async ({ code, codeVerifier }) => {
+        expect(code).toBe("valid-code");
+        expect(codeVerifier.length).toBeGreaterThan(30);
+        return { accessToken: "access-token-secret", refreshToken: "refresh-token-secret", scope: ["openid","email",gmailReadOnlyScope], tokenType: "Bearer" };
+      },
+      identity: async accessToken => {
+        expect(accessToken).toBe("access-token-secret");
+        return { subject: "google-subject-123", email: oauthIdentityEmail, emailVerified: true };
+      },
+      revoke: async accessToken => { revokedToken = accessToken; }
+    };
     app = await buildApp(db, {
       connectorSecrets: { "connector/demo": "test-secret" },
+      googleOAuth,
+      secretVault: new InMemorySecretVault(),
       detectEmailProvider: async domain => ({
         domain,
         providerKey: "google",
@@ -350,5 +371,55 @@ describe("Case Control vertical slice", () => {
       display_label: "Priorisiertes Pilotpostfach"
     });
     expect((await db.query("SELECT id FROM pilot_channel_accounts WHERE tenant_id=$1 AND id=$2", [otherTenantId,otherAccountId])).rows).toHaveLength(1);
+  });
+
+  it("verbindet ausschließlich das exakt gewählte Gmail-Konto über einmaliges State und PKCE", async () => {
+    const gmailSetup = {
+      ...pilotSetup,
+      channelAccounts: pilotSetup.channelAccounts.map(account => account.id === pilotSetup.selectedChannelAccountId
+        ? { ...account, identifier: "blazedoutfitters@gmail.com", providerKey: "google", mailProductKey: "gmail" }
+        : account)
+    };
+    expect((await app.inject({ method: "PUT", url: "/api/v1/pilot-onboarding", headers: { ...editor, "if-match": "0" }, payload: gmailSetup })).statusCode).toBe(201);
+    const started = await app.inject({ method: "POST", url: `/api/v1/channel-accounts/${gmailSetup.selectedChannelAccountId}/authorization/google/start`, headers: editor });
+    expect(started.statusCode).toBe(200);
+    const authorizationUrl = new URL(started.json().authorizationUrl);
+    expect(authorizationUrl.hostname).toBe("accounts.example.test");
+    expect(authorizationUrl.searchParams.get("login_hint")).toBe("blazedoutfitters@gmail.com");
+    expect(authorizationUrl.searchParams.get("code_challenge")).toHaveLength(43);
+    const state = authorizationUrl.searchParams.get("state")!;
+    expect(state.startsWith(`${ids.tenant}.`)).toBe(true);
+    const callback = await app.inject({ method: "GET", url: `/api/oauth/google/callback?state=${encodeURIComponent(state)}&code=valid-code` });
+    expect(callback.statusCode).toBe(302);
+    expect(callback.headers.location).toBe("/?googleOAuth=connected");
+    const status = await app.inject({ method: "GET", url: `/api/v1/channel-accounts/${gmailSetup.selectedChannelAccountId}/authorization`, headers: editor });
+    expect(status.json()).toMatchObject({ configured: true, authorization: { status: "connected", expectedIdentifier: "blazedoutfitters@gmail.com", authorizedIdentifier: "blazedoutfitters@gmail.com", errorCode: null } });
+    const stored = await db.query<Record<string,unknown>>("SELECT secret_ref,authorized_identifier,provider_subject,granted_scopes FROM channel_authorizations");
+    expect(stored.rows).toHaveLength(1);
+    expect(JSON.stringify(stored.rows)).not.toContain("access-token-secret");
+    expect(JSON.stringify(stored.rows)).not.toContain("refresh-token-secret");
+    const replay = await app.inject({ method: "GET", url: `/api/oauth/google/callback?state=${encodeURIComponent(state)}&code=valid-code` });
+    expect(replay.statusCode).toBe(400);
+    const disconnected = await app.inject({ method: "DELETE", url: `/api/v1/channel-accounts/${gmailSetup.selectedChannelAccountId}/authorization`, headers: editor });
+    expect(disconnected.statusCode).toBe(204);
+    expect(revokedToken).toBe("access-token-secret");
+  });
+
+  it("weist ein anderes Google-Konto ohne Tokenpersistenz zurück", async () => {
+    const gmailSetup = {
+      ...pilotSetup,
+      channelAccounts: pilotSetup.channelAccounts.map(account => account.id === pilotSetup.selectedChannelAccountId
+        ? { ...account, identifier: "blazedoutfitters@gmail.com", providerKey: "google", mailProductKey: "gmail" }
+        : account)
+    };
+    await app.inject({ method: "PUT", url: "/api/v1/pilot-onboarding", headers: { ...editor, "if-match": "0" }, payload: gmailSetup });
+    oauthIdentityEmail = "anderes-konto@gmail.com";
+    const started = await app.inject({ method: "POST", url: `/api/v1/channel-accounts/${gmailSetup.selectedChannelAccountId}/authorization/google/start`, headers: editor });
+    const state = new URL(started.json().authorizationUrl).searchParams.get("state")!;
+    const callback = await app.inject({ method: "GET", url: `/api/oauth/google/callback?state=${encodeURIComponent(state)}&code=valid-code` });
+    expect(callback.statusCode).toBe(302);
+    expect(callback.headers.location).toContain("GOOGLE_ACCOUNT_MISMATCH");
+    const authorization = (await db.query<Record<string,unknown>>("SELECT status,error_code,secret_ref FROM channel_authorizations")).rows[0];
+    expect(authorization).toMatchObject({ status: "error", error_code: "GOOGLE_ACCOUNT_MISMATCH", secret_ref: null });
   });
 });
