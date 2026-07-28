@@ -174,6 +174,9 @@ export async function buildApp(db: Database, options: { serveWeb?: boolean; conn
     const primaryChannel = primaryChannelFor(selectedAccount.mailProductKey!);
     const saved = await db.withTenant(request.session.tenantId, async tx => {
       const current = (await tx.query<Row>("SELECT version FROM pilot_onboarding_requests WHERE tenant_id=$1 FOR UPDATE", [request.session.tenantId])).rows[0];
+      const existingAccounts = current
+        ? (await tx.query<{ id: string }>("SELECT id::text AS id FROM pilot_channel_accounts WHERE tenant_id=$1 FOR UPDATE", [request.session.tenantId])).rows
+        : [];
       if ((!current && expectedVersion !== 0) || (current && Number(current.version) !== expectedVersion)) throw problem(409, "VERSION_CONFLICT", "Die Ersteinrichtung wurde zwischenzeitlich geändert. Bitte neu laden.");
       if (!current) {
         await tx.query(`INSERT INTO pilot_onboarding_requests
@@ -189,13 +192,26 @@ export async function buildApp(db: Database, options: { serveWeb?: boolean; conn
           pilot_owner_name=$14,pilot_owner_email=$15,technical_contact_name=$16,technical_contact_email=$17,access_environment=$18,
           data_exclusions_confirmed=$19,inventory_confirmed=$20,updated_by_actor_id=$21,updated_at=now(),version=version+1 WHERE tenant_id=$1`,
           [request.session.tenantId,value.organizationName,value.brandName,value.workflowName,primaryChannel,value.identityProvider,value.systemOfRecord,value.hostingRegion,value.targetStartDate,JSON.stringify(value.teamNames),value.expectedUsers,value.monthlyCases,value.retentionDays,value.pilotOwnerName,value.pilotOwnerEmail,value.technicalContactName,value.technicalContactEmail,value.accessEnvironment,value.dataExclusionsConfirmed,value.inventoryConfirmed,request.session.actorId]);
-        await tx.query("DELETE FROM pilot_channel_accounts WHERE tenant_id=$1", [request.session.tenantId]);
       }
+      const existingIds = new Set(existingAccounts.map(account => account.id));
+      const submittedIds = new Set(value.channelAccounts.map(account => account.id));
       for (const account of value.channelAccounts) {
-        await tx.query(`INSERT INTO pilot_channel_accounts
-          (id,tenant_id,channel_type,identifier,display_label,email_provider,provider_key,mail_product_key,email_provider_name,activation_status,created_by_actor_id,updated_by_actor_id)
-          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11)`,
-          [account.id,request.session.tenantId,account.type,account.identifier,account.label ?? "",legacyEmailProvider(account.providerKey) ?? null,account.providerKey ?? null,account.mailProductKey ?? null,account.providerName ?? null,account.type === "email" ? "inventory" : "blocked",request.session.actorId]);
+        const accountValues = [account.id,request.session.tenantId,account.type,account.identifier,account.label ?? "",legacyEmailProvider(account.providerKey) ?? null,account.providerKey ?? null,account.mailProductKey ?? null,account.providerName ?? null,account.type === "email" ? "inventory" : "blocked",request.session.actorId];
+        if (existingIds.has(account.id)) {
+          await tx.query(`UPDATE pilot_channel_accounts SET
+            channel_type=$3,identifier=$4,display_label=$5,email_provider=$6,provider_key=$7,mail_product_key=$8,
+            email_provider_name=$9,activation_status=$10,updated_by_actor_id=$11,updated_at=now()
+            WHERE id=$1 AND tenant_id=$2`, accountValues);
+        } else {
+          await tx.query(`INSERT INTO pilot_channel_accounts
+            (id,tenant_id,channel_type,identifier,display_label,email_provider,provider_key,mail_product_key,email_provider_name,activation_status,created_by_actor_id,updated_by_actor_id)
+            VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11)`, accountValues);
+        }
+      }
+      for (const account of existingAccounts) {
+        if (!submittedIds.has(account.id)) {
+          await tx.query("DELETE FROM pilot_channel_accounts WHERE tenant_id=$1 AND id=$2", [request.session.tenantId,account.id]);
+        }
       }
       await tx.query("UPDATE pilot_onboarding_requests SET selected_channel_account_id=$2 WHERE tenant_id=$1", [request.session.tenantId,value.selectedChannelAccountId]);
       await tx.query(`INSERT INTO audit_entries(id,tenant_id,category,action,actor_id,subject_type,subject_id,result,request_id,metadata)

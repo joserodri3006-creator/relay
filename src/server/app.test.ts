@@ -293,4 +293,62 @@ describe("Case Control vertical slice", () => {
     const audit = await db.query<{ action: string; metadata: Record<string,unknown> }>("SELECT action,metadata FROM audit_entries WHERE category='pilot_configuration'");
     expect(audit.rows).toEqual([{ action: "pilot_setup.submitted", metadata: {} }]);
   });
+
+  it("behält Kanal-IDs und Erstellungsmetadaten bei Updates stabil", async () => {
+    const created = await app.inject({ method: "PUT", url: "/api/v1/pilot-onboarding", headers: { ...editor, "if-match": "0" }, payload: pilotSetup });
+    expect(created.statusCode).toBe(201);
+    const before = (await db.query<{ id: string; created_at: string; created_by_actor_id: string }>(
+      "SELECT id::text,created_at,created_by_actor_id::text FROM pilot_channel_accounts WHERE id=$1",
+      [pilotSetup.channelAccounts[0]!.id]
+    )).rows[0]!;
+    const otherTenantId = "20000000-0000-4000-8000-000000000001";
+    const otherAccountId = "20000000-0000-4000-8000-000000000002";
+    await db.query("INSERT INTO tenants(id,name) VALUES($1,'Anderer Mandant')", [otherTenantId]);
+    await db.query(`INSERT INTO pilot_onboarding_requests
+      (tenant_id,organization_name,workflow_name,primary_channel,identity_provider,system_of_record,hosting_region,target_start_date,
+       team_names,expected_users,monthly_cases,retention_days,pilot_owner_name,pilot_owner_email,technical_contact_name,
+       technical_contact_email,access_environment,data_exclusions_confirmed,brand_name,inventory_confirmed,created_by_actor_id,updated_by_actor_id)
+      SELECT $1,organization_name,workflow_name,primary_channel,identity_provider,system_of_record,hosting_region,target_start_date,
+       team_names,expected_users,monthly_cases,retention_days,pilot_owner_name,pilot_owner_email,technical_contact_name,
+       technical_contact_email,access_environment,data_exclusions_confirmed,brand_name,inventory_confirmed,created_by_actor_id,updated_by_actor_id
+      FROM pilot_onboarding_requests WHERE tenant_id=$2`, [otherTenantId,ids.tenant]);
+    await db.query(`INSERT INTO pilot_channel_accounts
+      (id,tenant_id,channel_type,identifier,display_label,activation_status,created_by_actor_id,updated_by_actor_id)
+      VALUES($1,$2,'instagram','@otherbrand','Anderer Account','blocked',$3,$3)`, [otherAccountId,otherTenantId,ids.editor]);
+    const addedId = "10000000-0000-4000-8000-000000000009";
+    const updatedSetup = {
+      ...pilotSetup,
+      channelAccounts: [
+        ...pilotSetup.channelAccounts
+          .filter(account => account.id !== "10000000-0000-4000-8000-000000000008")
+          .map(account => account.id === pilotSetup.channelAccounts[0]!.id ? { ...account, label: "Priorisiertes Pilotpostfach" } : account),
+        { id: addedId, type: "email", identifier: "vip@blazed.example", label: "VIP" }
+      ]
+    };
+    const updated = await app.inject({ method: "PUT", url: "/api/v1/pilot-onboarding", headers: { ...editor, "if-match": "1" }, payload: updatedSetup });
+    expect(updated.statusCode).toBe(200);
+    expect(updated.json().setup).toMatchObject({
+      version: 2,
+      selectedChannelAccountId: pilotSetup.channelAccounts[0]!.id,
+      channelAccounts: expect.arrayContaining([
+        expect.objectContaining({ id: pilotSetup.channelAccounts[0]!.id, label: "Priorisiertes Pilotpostfach" }),
+        expect.objectContaining({ id: addedId, identifier: "vip@blazed.example" })
+      ])
+    });
+    expect(updated.json().setup.channelAccounts).toHaveLength(8);
+    expect(updated.json().setup.channelAccounts).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "10000000-0000-4000-8000-000000000008" })
+    ]));
+    const after = (await db.query<{ id: string; created_at: string; created_by_actor_id: string; display_label: string }>(
+      "SELECT id::text,created_at,created_by_actor_id::text,display_label FROM pilot_channel_accounts WHERE id=$1",
+      [pilotSetup.channelAccounts[0]!.id]
+    )).rows[0]!;
+    expect(after).toMatchObject({
+      id: before.id,
+      created_at: before.created_at,
+      created_by_actor_id: before.created_by_actor_id,
+      display_label: "Priorisiertes Pilotpostfach"
+    });
+    expect((await db.query("SELECT id FROM pilot_channel_accounts WHERE tenant_id=$1 AND id=$2", [otherTenantId,otherAccountId])).rows).toHaveLength(1);
+  });
 });
