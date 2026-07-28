@@ -63,6 +63,7 @@ Migrations are ordered, checksum-protected and serialized through a PostgreSQL a
 - geschützter Fünf-Schritt-Wizard für Pilot-Ersteinrichtung mit eigener `pilot:configure`-Capability
 - tenantgebundenes Kanalinventar mit genau einem ausgewählten E-Mail-Pilotpostfach; Social-Accounts bleiben fail-closed blockiert
 - tenantgebundener, versionierter und auditierter Einrichtungsauftrag ohne Secrets oder Kommunikationsinhalte
+- Gmail-OAuth-Grundlage mit einmaligem State, PKCE, exaktem Postfach-Match, widerrufbarer Autorisierung und reinen Secret-Referenzen in der Produktdatenbank
 - executable OpenAPI 3.1 document at `/api/openapi.json`
 - persistent local database under `.data/`
 
@@ -90,6 +91,12 @@ Ein berechtigter Nutzer öffnet in der Navigation **Ersteinrichtung**. Der Wizar
 - Bestätigung ausgeschlossener sensibler Datenklassen.
 
 Die Aktion **Einrichtung anfordern** provisioniert nichts und aktiviert keine realen Daten. Die übrigen E-Mail- und Social-Accounts bleiben reines Inventar. Relay zeigt anschließend die getrennten Prüfungen für PostgreSQL/RLS, OIDC, Secret-Rotation, Provideradapter, Shadow Run und Backup/Restore. Passwörter, Tokens, Client Secrets, Datenbank-URLs und Kundennachrichten gehören niemals in das Formular.
+
+Für einen lokalen Google-OAuth-Test werden `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET` und
+`GOOGLE_OAUTH_REDIRECT_URI=http://localhost:3001/api/oauth/google/callback` gemeinsam gesetzt. Die lokale
+Laufzeit hält Tokenmaterial ausschließlich flüchtig im Prozess. Produktion bleibt absichtlich gesperrt,
+bis ein verwalteter `SecretVault`-Adapter konfiguriert ist; `channel_authorizations` speichert nur dessen
+opaque Referenz.
 
 Run the local outbox relay separately when needed:
 
