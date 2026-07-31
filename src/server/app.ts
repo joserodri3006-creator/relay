@@ -11,6 +11,7 @@ import { commitmentSchema, commitmentUpdateSchema, connectorIngressSchema, email
 import { recordDomainChange } from "./eventing.js";
 import { openapiDocument } from "./openapi.js";
 import { EmailProviderDetector, EmailProviderLookupTemporaryError, type EmailProviderDetection } from "./email-provider.js";
+import { GoogleOAuthHttpGateway, InMemorySecretVault, gmailReadOnlyScope, randomOAuthValue, sha256Base64Url, sha256Hex, type GoogleOAuthGateway, type GoogleTokenSet, type SecretVault } from "./google-oauth.js";
 import { processCanonicalIngress } from "./ingress-service.js";
 import { createDemoAuthenticator, type Authenticator } from "./auth.js";
 
@@ -88,13 +89,15 @@ function verifyConnectorSignature(rawBody: Buffer, timestamp: string | undefined
 
 type AuthPublicConfig = { mode: "demo" } | { mode: "oidc"; authority: string; clientId: string; scope: string; redirectUri: string; postLogoutRedirectUri: string };
 
-export async function buildApp(db: Database, options: { serveWeb?: boolean; connectorSecrets?: Record<string, string>; authenticate?: Authenticator; corsOrigins?: string[]; logger?: boolean; expectedMigration?: string; authPublicConfig?: AuthPublicConfig; enableTestIngress?: boolean; detectEmailProvider?: (domain: string) => Promise<EmailProviderDetection> } = {}) {
+export async function buildApp(db: Database, options: { serveWeb?: boolean; connectorSecrets?: Record<string, string>; authenticate?: Authenticator; corsOrigins?: string[]; logger?: boolean; expectedMigration?: string; authPublicConfig?: AuthPublicConfig; enableTestIngress?: boolean; detectEmailProvider?: (domain: string) => Promise<EmailProviderDetection>; googleOAuth?: GoogleOAuthGateway; secretVault?: SecretVault } = {}) {
   const app = options.logger
     ? Fastify({ logger: { level: "info", redact: ["req.headers.authorization", "req.headers.x-relay-signature"] }, disableRequestLogging: true, bodyLimit: 1024 * 1024 })
     : Fastify({ logger: false, bodyLimit: 1024 * 1024 });
   const authenticate = options.authenticate ?? createDemoAuthenticator();
   const providerDetector = new EmailProviderDetector();
   const detectEmailProvider = options.detectEmailProvider ?? providerDetector.detect.bind(providerDetector);
+  const googleOAuth = options.googleOAuth ?? new GoogleOAuthHttpGateway({});
+  const secretVault = options.secretVault ?? new InMemorySecretVault();
   app.removeContentTypeParser("application/json");
   app.addContentTypeParser("application/json", { parseAs: "buffer" }, (request, body, done) => {
     request.rawBody = Buffer.isBuffer(body) ? body : Buffer.from(body);
@@ -112,7 +115,7 @@ export async function buildApp(db: Database, options: { serveWeb?: boolean; conn
   });
 
   app.addHook("preHandler", async (request) => {
-    if (!request.url.startsWith("/api/") || request.url === "/api/health" || request.url === "/api/openapi.json" || request.url === "/api/auth/config" || request.url.startsWith("/api/internal/")) return;
+    if (!request.url.startsWith("/api/") || request.url === "/api/health" || request.url === "/api/openapi.json" || request.url === "/api/auth/config" || request.url.startsWith("/api/internal/") || request.url.startsWith("/api/oauth/google/callback")) return;
     request.session = await authenticate(request);
   });
 
@@ -162,6 +165,161 @@ export async function buildApp(db: Database, options: { serveWeb?: boolean; conn
       }
       throw problem(400, "EMAIL_DOMAIN_INVALID", "Die E-Mail-Domain ist ungültig.");
     }
+  });
+
+  app.get("/api/v1/channel-accounts/:accountId/authorization", async request => {
+    requirePilotConfigurator(request);
+    const { accountId } = request.params as { accountId: string };
+    if (!/^[0-9a-f-]{36}$/i.test(accountId)) throw problem(400, "CHANNEL_ACCOUNT_INVALID", "Die Kanal-ID ist ungültig.");
+    const row = await one(db, request.session.tenantId, `SELECT a.id::text,a.status,a.expected_identifier AS "expectedIdentifier",
+      a.authorized_identifier AS "authorizedIdentifier",a.granted_scopes AS "grantedScopes",a.error_code AS "errorCode",
+      a.updated_at AS "updatedAt" FROM channel_authorizations a
+      WHERE a.tenant_id=$1 AND a.channel_account_id=$2 AND a.provider='google'`, [request.session.tenantId,accountId]);
+    return { configured: googleOAuth.configured, authorization: row };
+  });
+
+  app.post("/api/v1/channel-accounts/:accountId/authorization/google/start", { config: { rateLimit: { max: 5, timeWindow: "10 minutes" } } }, async request => {
+    requirePilotConfigurator(request);
+    if (!googleOAuth.configured) throw problem(503, "GOOGLE_OAUTH_NOT_CONFIGURED", "Google OAuth ist für diese Umgebung noch nicht konfiguriert.");
+    const { accountId } = request.params as { accountId: string };
+    const state = `${request.session.tenantId}.${randomOAuthValue()}`;
+    const codeVerifier = randomOAuthValue();
+    const flowId = uuid();
+    const authorizationId = uuid();
+    const pkceSecretRef = `oauth-flow/google/${flowId}`;
+    const account = await one(db, request.session.tenantId, `SELECT a.id::text,a.identifier,a.provider_key,a.mail_product_key
+      FROM pilot_channel_accounts a JOIN pilot_onboarding_requests p ON p.tenant_id=a.tenant_id
+      WHERE a.tenant_id=$1 AND a.id=$2 AND a.channel_type='email' AND p.selected_channel_account_id=a.id`, [request.session.tenantId,accountId]);
+    if (!account) throw problem(404, "PILOT_CHANNEL_ACCOUNT_NOT_FOUND", "Das gewählte Pilot-Postfach wurde nicht gefunden.");
+    if (account.provider_key !== "google" || !["gmail","google_workspace"].includes(String(account.mail_product_key))) {
+      throw problem(409, "GOOGLE_PROVIDER_REQUIRED", "Dieses Postfach ist nicht als Google-Postfach bestätigt.");
+    }
+    const previousAuthorization = await one(db, request.session.tenantId, `SELECT secret_ref AS "secretRef"
+      FROM channel_authorizations WHERE tenant_id=$1 AND channel_account_id=$2 AND provider='google'`, [request.session.tenantId,accountId]);
+    if (previousAuthorization?.secretRef) {
+      const previousTokens = await secretVault.get(String(previousAuthorization.secretRef));
+      if (previousTokens && "accessToken" in previousTokens) await googleOAuth.revoke(previousTokens.accessToken);
+      await secretVault.delete(String(previousAuthorization.secretRef));
+    }
+    await secretVault.put(pkceSecretRef, { codeVerifier });
+    try {
+      await db.withTenant(request.session.tenantId, async tx => {
+        const authorization = (await tx.query<{ id: string }>(`INSERT INTO channel_authorizations
+          (id,tenant_id,channel_account_id,provider,status,expected_identifier,created_by_actor_id,updated_by_actor_id)
+          VALUES($1,$2,$3,'google','pending',$4,$5,$5)
+          ON CONFLICT (tenant_id,channel_account_id,provider) DO UPDATE SET
+            status='pending',expected_identifier=EXCLUDED.expected_identifier,authorized_identifier=NULL,provider_subject=NULL,
+            secret_ref=NULL,granted_scopes='[]'::jsonb,error_code=NULL,updated_by_actor_id=EXCLUDED.updated_by_actor_id,
+            updated_at=now(),version=channel_authorizations.version+1
+          RETURNING id::text`, [authorizationId,request.session.tenantId,accountId,String(account.identifier).toLowerCase(),request.session.actorId])).rows[0]!;
+        await tx.query("UPDATE oauth_authorization_flows SET status='expired' WHERE tenant_id=$1 AND authorization_id=$2 AND status='pending'", [request.session.tenantId,authorization.id]);
+        await tx.query(`INSERT INTO oauth_authorization_flows
+          (id,tenant_id,authorization_id,actor_id,state_hash,pkce_secret_ref,status,expires_at)
+          VALUES($1,$2,$3,$4,$5,$6,'pending',now()+interval '10 minutes')`,
+          [flowId,request.session.tenantId,authorization.id,request.session.actorId,sha256Hex(state),pkceSecretRef]);
+        await tx.query(`INSERT INTO audit_entries(id,tenant_id,category,action,actor_id,subject_type,subject_id,result,request_id,metadata)
+          VALUES($1,$2,'channel_authorization','google.authorization_started',$3,'channel_account',$4,'success',$5,'{}'::jsonb)`,
+          [uuid(),request.session.tenantId,request.session.actorId,accountId,request.id]);
+      });
+    } catch (error) {
+      await secretVault.delete(pkceSecretRef);
+      throw error;
+    }
+    return {
+      authorizationUrl: googleOAuth.authorizationUrl({
+        state,
+        codeChallenge: sha256Base64Url(codeVerifier),
+        loginHint: String(account.identifier)
+      }),
+      expiresInSeconds: 600
+    };
+  });
+
+  app.get("/api/oauth/google/callback", async (request, reply) => {
+    const query = request.query as { state?: string; code?: string; error?: string };
+    const tenantId = query.state?.split(".", 1)[0];
+    if (!query.state || !tenantId || !/^[0-9a-f-]{36}$/i.test(tenantId)) {
+      throw problem(400, "OAUTH_STATE_INVALID", "Die Google-Autorisierung ist ungültig oder abgelaufen.");
+    }
+    const flow = await db.withTenant(tenantId, async tx => {
+      const found = (await tx.query<Row>(`SELECT f.id::text,f.authorization_id::text AS "authorizationId",f.actor_id::text AS "actorId",
+        f.pkce_secret_ref AS "pkceSecretRef",a.channel_account_id::text AS "accountId",a.expected_identifier AS "expectedIdentifier"
+        FROM oauth_authorization_flows f JOIN channel_authorizations a ON a.tenant_id=f.tenant_id AND a.id=f.authorization_id
+        WHERE f.tenant_id=$1 AND f.state_hash=$2 AND f.status='pending' AND f.expires_at>now() FOR UPDATE`, [tenantId,sha256Hex(query.state!)])).rows[0];
+      if (!found) throw problem(400, "OAUTH_STATE_INVALID", "Die Google-Autorisierung ist ungültig oder abgelaufen.");
+      await tx.query("UPDATE oauth_authorization_flows SET status='consumed',consumed_at=now() WHERE tenant_id=$1 AND id=$2", [tenantId,found.id]);
+      return found;
+    });
+    const fail = async (code: string) => {
+      await db.withTenant(tenantId, async tx => {
+        await tx.query(`UPDATE channel_authorizations SET status='error',error_code=$3,updated_at=now(),version=version+1
+          WHERE tenant_id=$1 AND id=$2`, [tenantId,flow.authorizationId,code]);
+        await tx.query(`INSERT INTO audit_entries(id,tenant_id,category,action,actor_id,subject_type,subject_id,result,request_id,reason_code,metadata)
+          VALUES($1,$2,'channel_authorization','google.authorization_failed',$3,'channel_account',$4,'failure',$5,$6,'{}'::jsonb)`,
+          [uuid(),tenantId,flow.actorId,flow.accountId,request.id,code]);
+      });
+      return reply.redirect(`/?googleOAuth=error&code=${encodeURIComponent(code)}`);
+    };
+    if (query.error) {
+      await secretVault.delete(String(flow.pkceSecretRef));
+      return fail(query.error === "access_denied" ? "GOOGLE_ACCESS_DENIED" : "GOOGLE_AUTHORIZATION_FAILED");
+    }
+    if (!query.code) return fail("GOOGLE_CODE_MISSING");
+    const verifierSecret = await secretVault.get(String(flow.pkceSecretRef));
+    await secretVault.delete(String(flow.pkceSecretRef));
+    if (!verifierSecret || !("codeVerifier" in verifierSecret)) return fail("OAUTH_PKCE_SECRET_MISSING");
+    try {
+      const tokens = await googleOAuth.exchangeCode({ code: query.code, codeVerifier: verifierSecret.codeVerifier });
+      const identity = await googleOAuth.identity(tokens.accessToken);
+      const rejectTokens = async (code: string) => {
+        await googleOAuth.revoke(tokens.refreshToken ?? tokens.accessToken).catch(() => undefined);
+        return fail(code);
+      };
+      if (!identity.emailVerified) return rejectTokens("GOOGLE_EMAIL_NOT_VERIFIED");
+      if (identity.email.trim().toLowerCase() !== String(flow.expectedIdentifier).trim().toLowerCase()) return rejectTokens("GOOGLE_ACCOUNT_MISMATCH");
+      if (!tokens.scope.includes(gmailReadOnlyScope)) return rejectTokens("GOOGLE_SCOPE_MISSING");
+      const tokenSecretRef = `channel-authorization/google/${flow.authorizationId}`;
+      await secretVault.put(tokenSecretRef, tokens);
+      try {
+        await db.withTenant(tenantId, async tx => {
+          await tx.query(`UPDATE channel_authorizations SET status='connected',authorized_identifier=$3,provider_subject=$4,
+            secret_ref=$5,granted_scopes=$6::jsonb,error_code=NULL,updated_at=now(),version=version+1 WHERE tenant_id=$1 AND id=$2`,
+            [tenantId,flow.authorizationId,identity.email.toLowerCase(),identity.subject,tokenSecretRef,JSON.stringify(tokens.scope)]);
+          await tx.query(`INSERT INTO audit_entries(id,tenant_id,category,action,actor_id,subject_type,subject_id,result,request_id,metadata)
+            VALUES($1,$2,'channel_authorization','google.authorization_connected',$3,'channel_account',$4,'success',$5,'{}'::jsonb)`,
+            [uuid(),tenantId,flow.actorId,flow.accountId,request.id]);
+        });
+      } catch (error) {
+        await secretVault.delete(tokenSecretRef);
+        throw error;
+      }
+      return reply.redirect("/?googleOAuth=connected");
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith("GOOGLE_")) return fail(error.message);
+      throw error;
+    }
+  });
+
+  app.delete("/api/v1/channel-accounts/:accountId/authorization", async (request, reply) => {
+    requirePilotConfigurator(request);
+    const { accountId } = request.params as { accountId: string };
+    const authorization = await one(db, request.session.tenantId, `SELECT id::text,secret_ref AS "secretRef",status
+      FROM channel_authorizations WHERE tenant_id=$1 AND channel_account_id=$2 AND provider='google'`, [request.session.tenantId,accountId]);
+    if (!authorization) return reply.code(204).send();
+    if (authorization.secretRef) {
+      const tokens = await secretVault.get(String(authorization.secretRef));
+      if (tokens && "accessToken" in tokens) await googleOAuth.revoke(tokens.accessToken);
+      await secretVault.delete(String(authorization.secretRef));
+    }
+    await db.withTenant(request.session.tenantId, async tx => {
+      await tx.query(`UPDATE channel_authorizations SET status='revoked',secret_ref=NULL,provider_subject=NULL,
+        granted_scopes='[]'::jsonb,error_code=NULL,updated_by_actor_id=$3,updated_at=now(),version=version+1
+        WHERE tenant_id=$1 AND id=$2`, [request.session.tenantId,authorization.id,request.session.actorId]);
+      await tx.query(`INSERT INTO audit_entries(id,tenant_id,category,action,actor_id,subject_type,subject_id,result,request_id,metadata)
+        VALUES($1,$2,'channel_authorization','google.authorization_revoked',$3,'channel_account',$4,'success',$5,'{}'::jsonb)`,
+        [uuid(),request.session.tenantId,request.session.actorId,accountId,request.id]);
+    });
+    return reply.code(204).send();
   });
 
   app.put("/api/v1/pilot-onboarding", async (request, reply) => {

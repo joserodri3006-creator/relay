@@ -15,7 +15,7 @@ export const openapiDocument = {
   openapi: "3.1.0",
   info: { title: "Relay Communication Control Plane API", version: "1.0.0", description: "Providerneutrale Conversation Runtime. Case ist die UX-Sicht einer Conversation." },
   servers: [{ url: "/", description: "Current deployment" }],
-  tags: [{ name: "Ingress" }, { name: "Cases" }, { name: "Commitments" }, { name: "Handoffs" }, { name: "Audit" }, { name: "Operations" }, { name: "Pilot Onboarding" }],
+  tags: [{ name: "Ingress" }, { name: "Cases" }, { name: "Commitments" }, { name: "Handoffs" }, { name: "Audit" }, { name: "Operations" }, { name: "Pilot Onboarding" }, { name: "Channel Authorization" }],
   paths: {
     "/api/v1/ingress/events": { post: { tags: ["Ingress"], summary: "Kanonisches Kommunikationsereignis idempotent verarbeiten", security: auth, requestBody: jsonBody(schema(ingressSchema)), responses: { "202": response("Verarbeitet"), "200": response("Idempotentes Duplicate"), "400": response("Validierungsfehler", problem), "409": response("Idempotenzkonflikt", problem) }, "x-relay-adapter-contract": "ChannelAdapterV1" } },
     "/api/internal/v1/channel-ingress/{routingKey}/events": { post: { tags: ["Ingress"], summary: "Signiertes Connector-Ereignis verarbeiten", parameters: [{ name: "routingKey", in: "path", required: true, schema: { type: "string" } }, { name: "X-Relay-Timestamp", in: "header", required: true, schema: { type: "integer" } }, { name: "X-Relay-Signature", in: "header", required: true, schema: { type: "string", pattern: "^sha256=[a-f0-9]{64}$" } }], requestBody: jsonBody(schema(connectorIngressSchema)), responses: { "202": response("Verarbeitet"), "200": response("Idempotentes Duplicate"), "401": response("Signatur ungültig", problem), "404": response("Routing-Key unbekannt", problem) }, "x-relay-signature-input": "timestamp + '.' + raw_request_body" } },
@@ -38,6 +38,16 @@ export const openapiDocument = {
           "503": response("DNS-Prüfung vorübergehend nicht verfügbar", problem)
         }
       }
+    },
+    "/api/v1/channel-accounts/{accountId}/authorization": {
+      get: { tags: ["Channel Authorization"], summary: "Google-Verbindungsstatus eines Kanal-Kontos lesen", security: auth, parameters: [{ name: "accountId", in: "path", required: true, schema: { type: "string", format: "uuid" } }], responses: { "200": response("Verbindungsstatus"), "403": response("Capability fehlt", problem) } },
+      delete: { tags: ["Channel Authorization"], summary: "Google-Verbindung widerrufen und Secret entfernen", security: auth, parameters: [{ name: "accountId", in: "path", required: true, schema: { type: "string", format: "uuid" } }], responses: { "204": { description: "Verbindung getrennt" }, "403": response("Capability fehlt", problem), "502": response("Provider-Widerruf fehlgeschlagen", problem) } }
+    },
+    "/api/v1/channel-accounts/{accountId}/authorization/google/start": {
+      post: { tags: ["Channel Authorization"], summary: "Einmaligen Google-OAuth-Flow mit State und PKCE starten", security: auth, parameters: [{ name: "accountId", in: "path", required: true, schema: { type: "string", format: "uuid" } }], responses: { "200": response("Autorisierungs-URL"), "404": response("Pilot-Postfach nicht gefunden", problem), "409": response("Kein bestätigtes Google-Postfach", problem), "503": response("OAuth nicht konfiguriert", problem) } }
+    },
+    "/api/oauth/google/callback": {
+      get: { tags: ["Channel Authorization"], summary: "Öffentlicher Google-OAuth-Callback mit einmaligem State", parameters: [{ name: "state", in: "query", required: true, schema: { type: "string" } }, { name: "code", in: "query", schema: { type: "string" } }, { name: "error", in: "query", schema: { type: "string" } }], responses: { "302": { description: "Zur Relay-Oberfläche zurückleiten" }, "400": response("State ungültig oder abgelaufen", problem) } }
     },
     "/api/v1/cases": { get: { tags: ["Cases"], summary: "Cases nach Attention View auflisten", security: auth, parameters: [{ name: "view", in: "query", schema: { type: "string", enum: ["mine", "unassigned", "active", "resolved"] } }], responses: { "200": response("Case-Liste", { type: "array", items: { type: "object" } }) } } },
     "/api/v1/cases/{id}": { get: { tags: ["Cases"], summary: "Case mit Timeline lesen", security: auth, parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }], responses: { "200": response("Case"), "404": response("Nicht gefunden", problem) } } },

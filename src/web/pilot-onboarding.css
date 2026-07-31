@@ -45,6 +45,13 @@
 .pilot-selection-summary { display: flex; flex-direction: column; gap: 5px; margin: 20px 0; padding: 17px; border: 1px solid #d8e4da; border-radius: 10px; background: #f5faf6; }
 .pilot-selection-summary strong { color: #214630; font-size: 15px; }
 .pilot-selection-summary small, .inventory-summary { color: #69766e; font-size: 12px; }
+.oauth-card { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin: 18px 0; padding: 17px; border: 1px solid #dfe4df; border-radius: 10px; background: #fafbf9; }
+.oauth-card > div { display: flex; min-width: 0; flex-direction: column; gap: 5px; }
+.oauth-card strong { color: #26372d; font-size: 14px; }
+.oauth-card small { max-width: 440px; color: #69766e; font-size: 11px; line-height: 1.45; }
+.oauth-card.oauth-connected { border-color: #8db79b; background: #f3faf5; }
+.oauth-card.oauth-error { border-color: #d8a99f; background: #fff7f5; }
+.oauth-card button { flex: 0 0 auto; }
 
 .channel-inventory { display: grid; gap: 18px; padding: 24px 28px; }
 .inventory-intro { display: grid; grid-template-columns: 220px 1fr; gap: 20px; padding-bottom: 18px; border-bottom: 1px solid #edf0ed; }
@@ -83,4 +90,5 @@
   .setup-fields, .setup-review, .channel-account-fields, .inventory-intro, .pilot-provider { grid-template-columns: 1fr; }
   .setup-fields .wide, .setup-warning { grid-column: 1; }
   .setup-header { padding-inline: 20px; }
+  .oauth-card { align-items: stretch; flex-direction: column; }
 }

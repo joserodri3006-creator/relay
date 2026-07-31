@@ -26,5 +26,6 @@ export async function api<T>(url: string, init?: RequestInit): Promise<T> {
     const body = await response.json().catch(() => ({})) as Problem;
     throw new Error(body.title || "Die Anfrage konnte nicht verarbeitet werden.");
   }
+  if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
 }

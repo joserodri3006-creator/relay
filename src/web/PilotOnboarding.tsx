@@ -46,6 +46,16 @@ type Setup = {
   version?: number;
 };
 type Response = { setup: Setup | null; state: string; relayGates?: string[]; nextStep: string };
+type AuthorizationStatus = {
+  configured: boolean;
+  authorization: null | {
+    status: "pending" | "connected" | "error" | "revoked";
+    expectedIdentifier: string;
+    authorizedIdentifier: string | null;
+    errorCode: string | null;
+    updatedAt: string;
+  };
+};
 
 const start = new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10);
 const newId = () => crypto.randomUUID();
@@ -114,6 +124,8 @@ export function PilotOnboarding() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState<Response | null>(null);
+  const [authorization, setAuthorization] = useState<AuthorizationStatus | null>(null);
+  const [authorizationBusy, setAuthorizationBusy] = useState(false);
   const [detections, setDetections] = useState<Record<string, { loading: boolean; result?: ProviderDetection; error?: string }>>({});
   const form = useRef<HTMLFormElement>(null);
 
@@ -126,6 +138,16 @@ export function PilotOnboarding() {
       .catch(err => setError(err.message))
       .finally(() => setLoading(false));
   }, []);
+  useEffect(() => {
+    const account = result?.setup?.channelAccounts.find(item => item.id === result.setup?.selectedChannelAccountId);
+    if (!account || account.providerKey !== "google") {
+      setAuthorization(null);
+      return;
+    }
+    api<AuthorizationStatus>(`/api/v1/channel-accounts/${account.id}/authorization`)
+      .then(setAuthorization)
+      .catch(err => setError(err.message));
+  }, [result]);
 
   const update = <K extends keyof Setup>(key: K, next: Setup[K]) => setValue(current => ({ ...current, [key]: next }));
   const counts = useMemo(() => value.channelAccounts.reduce<Record<ChannelType, number>>(
@@ -199,6 +221,29 @@ export function PilotOnboarding() {
       setSaving(false);
     }
   };
+  const connectGoogle = async (accountId: string) => {
+    setAuthorizationBusy(true);
+    setError("");
+    try {
+      const response = await api<{ authorizationUrl: string }>(`/api/v1/channel-accounts/${accountId}/authorization/google/start`, { method: "POST" });
+      window.location.assign(response.authorizationUrl);
+    } catch (err) {
+      setError((err as Error).message);
+      setAuthorizationBusy(false);
+    }
+  };
+  const disconnectGoogle = async (accountId: string) => {
+    setAuthorizationBusy(true);
+    setError("");
+    try {
+      await api<void>(`/api/v1/channel-accounts/${accountId}/authorization`, { method: "DELETE" });
+      setAuthorization(current => current ? { ...current, authorization: current.authorization ? { ...current.authorization, status: "revoked", authorizedIdentifier: null, errorCode: null } : null } : current);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setAuthorizationBusy(false);
+    }
+  };
 
   if (loading) return <div className="setup-loading">Ersteinrichtung wird geladen …</div>;
   if (result?.setup && result.state === "relay_review_required") {
@@ -214,9 +259,25 @@ export function PilotOnboarding() {
         <h2>{result.setup.brandName}</h2>
         <p>{result.setup.organizationName} · Startziel {new Intl.DateTimeFormat("de-DE").format(new Date(`${result.setup.targetStartDate}T12:00:00`))}</p>
         <div className="pilot-selection-summary"><span className="eyebrow">Pilot-Postfach</span><strong>{savedSelected?.identifier}</strong><small>{savedSelected?.mailProductKey ? productLabels[savedSelected.mailProductKey] : ""} · {result.setup.accessEnvironment}</small></div>
+        {savedSelected?.providerKey === "google" && <div className={`oauth-card oauth-${authorization?.authorization?.status ?? "not_connected"}`}>
+          <div><span className="eyebrow">Google-Verbindung</span>
+            <strong>{authorization?.authorization?.status === "connected" ? "Postfach verbunden" : authorization?.authorization?.status === "error" ? "Verbindung fehlgeschlagen" : "Noch nicht verbunden"}</strong>
+            <small>{authorization?.authorization?.status === "connected"
+              ? `Bestätigt als ${authorization.authorization.authorizedIdentifier}`
+              : authorization?.authorization?.errorCode === "GOOGLE_ACCOUNT_MISMATCH"
+                ? `Bitte exakt mit ${savedSelected.identifier} anmelden.`
+                : "Relay fordert ausschließlich lesenden Gmail-Zugriff an. Die Verbindung aktiviert noch keinen Versand."}</small>
+          </div>
+          {authorization?.authorization?.status === "connected"
+            ? <button className="secondary" disabled={authorizationBusy} onClick={() => void disconnectGoogle(savedSelected.id)}>Verbindung trennen</button>
+            : <button className="primary" disabled={authorizationBusy || !authorization?.configured} onClick={() => void connectGoogle(savedSelected.id)}>
+              {authorizationBusy ? "Google wird geöffnet …" : authorization?.configured ? "Mit Google verbinden" : "Google OAuth noch nicht konfiguriert"}
+            </button>}
+        </div>}
         <p className="inventory-summary">{savedCounts.email + savedCounts.instagram + savedCounts.tiktok} Kanäle erfasst · {savedCounts.email} E-Mail · {savedCounts.instagram} Instagram · {savedCounts.tiktok} TikTok</p>
         <div className="gate-preview"><span className="eyebrow">Von Relay zu prüfen</span>{(result.relayGates ?? []).map(gate => <div key={gate}><span /> {gateLabels[gate] ?? gate}</div>)}</div>
         <button className="secondary" onClick={() => { setResult(null); setStep(0); }}>Angaben bearbeiten</button>
+        {error && <div className="error-banner">{error}</div>}
       </div>
     </section>;
   }
