@@ -32,6 +32,21 @@ describe("runtime configuration", () => {
     expect(() => loadConfig({ ...validProduction, AUTH_MODE: "demo" })).toThrow(/AUTH_MODE=oidc/);
   });
 
+  it("verlangt für produktives Google OAuth einen verwalteten GCP-Vault", () => {
+    const googleOAuth = {
+      GOOGLE_OAUTH_CLIENT_ID: "google-client",
+      GOOGLE_OAUTH_CLIENT_SECRET: "google-secret",
+      GOOGLE_OAUTH_REDIRECT_URI: "https://pilot.example.test/api/oauth/google/callback"
+    };
+    expect(() => loadConfig({ ...validProduction, ...googleOAuth })).toThrow(/SECRET_VAULT_MODE=gcp/);
+    expect(loadConfig({ ...validProduction, ...googleOAuth, SECRET_VAULT_MODE: "gcp", GOOGLE_CLOUD_PROJECT: "relay-pilot-123" }))
+      .toMatchObject({ SECRET_VAULT_MODE: "gcp", GOOGLE_CLOUD_PROJECT: "relay-pilot-123" });
+  });
+
+  it("lehnt unvollständige Vault-Konfiguration ab", () => {
+    expect(() => loadConfig({ NODE_ENV: "test", SECRET_VAULT_MODE: "gcp" })).toThrow(/GOOGLE_CLOUD_PROJECT/);
+  });
+
   it("verlangt vom Worker PostgreSQL, aber keine Browser- oder OIDC-Konfiguration", () => {
     expect(loadConfig({ NODE_ENV: "production", DATABASE_URL: validProduction.DATABASE_URL }, "worker").DATABASE_URL).toBe(validProduction.DATABASE_URL);
     expect(() => loadConfig({ NODE_ENV: "production" }, "worker")).toThrow(/DATABASE_URL/);
