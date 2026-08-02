@@ -15,6 +15,8 @@ const environmentSchema = z.object({
   GOOGLE_OAUTH_CLIENT_ID: z.string().min(1).optional(),
   GOOGLE_OAUTH_CLIENT_SECRET: z.string().min(1).optional(),
   GOOGLE_OAUTH_REDIRECT_URI: z.string().url().optional(),
+  SECRET_VAULT_MODE: z.enum(["memory", "gcp"]).default("memory"),
+  GOOGLE_CLOUD_PROJECT: z.string().regex(/^[a-z][a-z0-9-]{4,61}[a-z0-9]$/).optional(),
   CORS_ORIGINS: z.string().optional(),
   CONNECTOR_SECRET: z.string().min(32).optional(),
   CONNECTOR_SECRET_REF: z.string().min(1).default("connector/demo"),
@@ -45,6 +47,12 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env, purpose
   const googleOAuthValues = [parsed.GOOGLE_OAUTH_CLIENT_ID, parsed.GOOGLE_OAUTH_CLIENT_SECRET, parsed.GOOGLE_OAUTH_REDIRECT_URI];
   if (googleOAuthValues.some(Boolean) && !googleOAuthValues.every(Boolean)) {
     throw new Error("GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET und GOOGLE_OAUTH_REDIRECT_URI müssen gemeinsam gesetzt sein.");
+  }
+  if (parsed.SECRET_VAULT_MODE === "gcp" && !parsed.GOOGLE_CLOUD_PROJECT) {
+    throw new Error("GOOGLE_CLOUD_PROJECT ist für SECRET_VAULT_MODE=gcp erforderlich.");
+  }
+  if (parsed.NODE_ENV === "production" && googleOAuthValues.every(Boolean) && parsed.SECRET_VAULT_MODE !== "gcp") {
+    throw new Error("Google OAuth benötigt in Produktion SECRET_VAULT_MODE=gcp.");
   }
   return { ...parsed, authMode, corsOrigins, connectorSecret: parsed.CONNECTOR_SECRET ?? parsed.CONNECTOR_SECRET_DEMO };
 }

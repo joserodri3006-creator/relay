@@ -94,9 +94,10 @@ Die Aktion **Einrichtung anfordern** provisioniert nichts und aktiviert keine re
 
 Für einen lokalen Google-OAuth-Test werden `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET` und
 `GOOGLE_OAUTH_REDIRECT_URI=http://localhost:3001/api/oauth/google/callback` gemeinsam gesetzt. Die lokale
-Laufzeit hält Tokenmaterial ausschließlich flüchtig im Prozess. Produktion bleibt absichtlich gesperrt,
-bis ein verwalteter `SecretVault`-Adapter konfiguriert ist; `channel_authorizations` speichert nur dessen
-opaque Referenz.
+Laufzeit hält Tokenmaterial ausschließlich flüchtig im Prozess. Produktion verlangt zusätzlich
+`SECRET_VAULT_MODE=gcp` und `GOOGLE_CLOUD_PROJECT`. Der GCP-Adapter authentifiziert sich über die
+Workload Identity des Dienstes, legt jede Änderung als neue Secret-Version ab und deaktiviert ältere
+aktive Versionen. `channel_authorizations` speichert weiterhin nur eine opaque Referenz.
 
 Run the local outbox relay separately when needed:
 
