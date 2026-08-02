@@ -5,6 +5,7 @@ import { loadConfig } from "./config.js";
 import { createDatabase, type Database } from "./db.js";
 import { createPostgresDatabase } from "./postgres.js";
 import { GoogleOAuthHttpGateway, InMemorySecretVault } from "./google-oauth.js";
+import { GcpMetadataAccessTokenProvider, GcpSecretVault } from "./gcp-secret-vault.js";
 
 const config = loadConfig();
 let db: Database;
@@ -24,9 +25,9 @@ const googleOAuth = new GoogleOAuthHttpGateway({
   clientSecret: config.GOOGLE_OAUTH_CLIENT_SECRET,
   redirectUri: config.GOOGLE_OAUTH_REDIRECT_URI
 });
-if (config.NODE_ENV === "production" && googleOAuth.configured) {
-  throw new Error("Google OAuth benötigt in Produktion zuerst einen verwalteten SecretVault-Adapter.");
-}
+const secretVault = config.SECRET_VAULT_MODE === "gcp"
+  ? new GcpSecretVault(config.GOOGLE_CLOUD_PROJECT!, new GcpMetadataAccessTokenProvider())
+  : new InMemorySecretVault();
 const app = await buildApp(db, {
   serveWeb: config.NODE_ENV === "production",
   connectorSecrets,
@@ -35,7 +36,7 @@ const app = await buildApp(db, {
   logger: config.NODE_ENV === "production",
   expectedMigration: config.NODE_ENV === "production" ? "010_channel_authorizations.sql" : undefined,
   googleOAuth,
-  secretVault: new InMemorySecretVault(),
+  secretVault,
   enableTestIngress: config.NODE_ENV !== "production",
   authPublicConfig: config.authMode === "oidc" ? {
     mode: "oidc", authority: config.OIDC_ISSUER!, clientId: config.OIDC_CLIENT_ID!, scope: config.OIDC_SCOPES,
